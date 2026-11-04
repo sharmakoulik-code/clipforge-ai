@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Clapperboard, FileVideo2, LayoutDashboard, LogOut, Menu, Settings2, Shield, Upload, X } from "lucide-react";
+import { Clapperboard, FileVideo2, LayoutDashboard, LogOut, Menu, Settings2, Share2, Shield, Upload, X } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { ApiError, apiRequest, type User } from "@/services/api";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -10,6 +10,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 const navigation = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/dashboard/upload", label: "Upload video", icon: Upload },
+  { href: "/dashboard/social", label: "Social Publisher", icon: Share2 },
   { href: "/dashboard/settings", label: "Account settings", icon: Settings2 },
 ];
 const adminNavigation = { href: "/dashboard/admin", label: "Administration", icon: Shield };

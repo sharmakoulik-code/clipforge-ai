@@ -57,6 +57,18 @@ services:
       redis:
         condition: service_healthy
 
+  social-scheduler:
+    <<: *backend
+    ports: []
+    command: ["celery", "-A", "app.workers.celery_app.celery", "beat", "--loglevel=INFO"]
+    healthcheck:
+      disable: true
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   postgres:
     image: postgres:16-alpine
     environment:

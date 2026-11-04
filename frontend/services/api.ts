@@ -48,8 +48,10 @@ export async function apiRequest<T>(path: string, init: RequestInit = {}): Promi
   if (!response.ok) {
     let message = `Request failed (${response.status})`;
     try {
-      const payload = await response.json() as { detail?: string };
-      message = payload.detail ?? message;
+      const payload = await response.json() as { detail?: unknown };
+      if (typeof payload.detail === "string") message = payload.detail;
+      else if (payload.detail && typeof payload.detail === "object" && "message" in payload.detail && typeof payload.detail.message === "string") message = payload.detail.message;
+      else if (payload.detail !== undefined) message = JSON.stringify(payload.detail);
     } catch { /* response had no JSON body */ }
     if (response.status === 401 && typeof window !== "undefined") window.dispatchEvent(new Event("auth:expired"));
     throw new ApiError(message, response.status);

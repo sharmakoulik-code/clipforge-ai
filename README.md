@@ -1,6 +1,6 @@
 # ClipForge AI — AI Video Repurposer
 
-ClipForge turns rights-cleared long-form video uploads into vertical short clips with captions and an interactive post-processing editor. This repository has evolved through four stages: the account/dashboard foundation, secure ingestion, resumable AI/video processing, and SaaS/editor foundations. See [Stage 2](docs/STAGE2.md), [Stage 3](docs/STAGE3.md), and [Stage 4](docs/STAGE4.md) for scope and verification boundaries.
+ClipForge turns rights-cleared long-form video uploads into vertical short clips with captions and an interactive post-processing editor. This repository has evolved through five stages: the account/dashboard foundation, secure ingestion, resumable AI/video processing, SaaS/editor foundations, and social publishing foundations. See [Stage 2](docs/STAGE2.md), [Stage 3](docs/STAGE3.md), [Stage 4](docs/STAGE4.md), and [Stage 5](docs/STAGE5.md) for scope and verification boundaries.
 
 > **Launch status:** local implementation and automated checks are available, but this is not a verified production deployment. Docker/Compose, live AI providers, Stripe, SMTP, cloud storage, and production operations have not been end-to-end tested. Stripe live keys are rejected in production configuration. Do not deploy publicly, enable live payments, or incur paid service charges without explicit approval.
 
@@ -66,4 +66,4 @@ The frontend proxies relative `/api/*` requests through `BACKEND_INTERNAL_URL` (
 git diff --check
 ```
 
-See [docs/STAGE4.md](docs/STAGE4.md) for implemented/partial/unverified features and a pre-launch checklist. See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.
+See [docs/STAGE4.md](docs/STAGE4.md) and [docs/STAGE5.md](docs/STAGE5.md) for implemented/partial/unverified features, provider support, setup requirements and pre-launch gaps. See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.

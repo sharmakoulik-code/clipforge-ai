@@ -13,6 +13,12 @@ celery.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "dispatch-due-social-publications": {
+            "task": "app.workers.tasks.dispatch_due_social_publications",
+            "schedule": max(10, settings.social_schedule_poll_seconds),
+        },
+    },
 )
 celery.autodiscover_tasks(["app.workers"])
 

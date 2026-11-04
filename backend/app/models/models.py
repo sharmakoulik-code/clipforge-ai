@@ -248,3 +248,126 @@ class SystemConfiguration(BaseModel):
     value: Mapped[dict] = mapped_column(JSON, nullable=False)
     is_secret: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     description: Mapped[str | None] = mapped_column(String(512))
+
+
+class SocialProvider(BaseModel):
+    __tablename__ = "social_providers"
+    slug: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(80), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    oauth_supported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    publishing_supported: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    approval_required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    availability_note: Mapped[str] = mapped_column(String(512), nullable=False)
+    limits_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class SocialAccount(BaseModel):
+    __tablename__ = "social_accounts"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("social_providers.id", ondelete="RESTRICT"), index=True, nullable=False)
+    external_account_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="connected", nullable=False, index=True)
+    account_metadata: Mapped[dict | None] = mapped_column(JSON)
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    disconnected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("user_id", "provider_id", "external_account_id", name="uq_social_account_owner_provider_external"),)
+
+
+class OAuthCredential(BaseModel):
+    __tablename__ = "oauth_credentials"
+    social_account_id: Mapped[str] = mapped_column(ForeignKey("social_accounts.id", ondelete="CASCADE"), unique=True, nullable=False)
+    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    scopes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    token_type: Mapped[str] = mapped_column(String(32), default="Bearer", nullable=False)
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SocialOAuthState(BaseModel):
+    __tablename__ = "social_oauth_states"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("social_providers.id", ondelete="CASCADE"), nullable=False)
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    code_verifier: Mapped[str] = mapped_column(String(128), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(String(2048), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PublishingPost(BaseModel):
+    __tablename__ = "publishing_posts"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    clip_id: Mapped[str | None] = mapped_column(ForeignKey("clips.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    timezone: Mapped[str] = mapped_column(String(80), default="UTC", nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    __table_args__ = (UniqueConstraint("user_id", "idempotency_key", name="uq_publishing_post_owner_idempotency"),)
+
+
+class PublishingTarget(BaseModel):
+    __tablename__ = "publishing_targets"
+    post_id: Mapped[str] = mapped_column(ForeignKey("publishing_posts.id", ondelete="CASCADE"), index=True, nullable=False)
+    social_account_id: Mapped[str | None] = mapped_column(ForeignKey("social_accounts.id", ondelete="SET NULL"), index=True)
+    provider_id: Mapped[str] = mapped_column(ForeignKey("social_providers.id", ondelete="RESTRICT"), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", nullable=False, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    platform_options: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
+    external_post_id: Mapped[str | None] = mapped_column(String(255))
+    external_post_url: Mapped[str | None] = mapped_column(String(2048))
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    last_error_message: Mapped[str | None] = mapped_column(String(1000))
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    analytics_json: Mapped[dict | None] = mapped_column(JSON)
+    __table_args__ = (UniqueConstraint("post_id", "social_account_id", name="uq_publishing_target_post_account"),)
+
+
+class PublishingSchedule(BaseModel):
+    __tablename__ = "publishing_schedules"
+    target_id: Mapped[str] = mapped_column(ForeignKey("publishing_targets.id", ondelete="CASCADE"), unique=True, nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    timezone: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="scheduled", nullable=False, index=True)
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PublishingAttempt(BaseModel):
+    __tablename__ = "publishing_attempts"
+    target_id: Mapped[str] = mapped_column(ForeignKey("publishing_targets.id", ondelete="CASCADE"), index=True, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(255))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(String(1000))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("target_id", "attempt_number", name="uq_publishing_attempt_number"),)
+
+
+class PlatformMetadata(BaseModel):
+    __tablename__ = "platform_metadata"
+    target_id: Mapped[str] = mapped_column(ForeignKey("publishing_targets.id", ondelete="CASCADE"), index=True, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    generation_model: Mapped[str | None] = mapped_column(String(160))
+    status: Mapped[str] = mapped_column(String(32), default="generated", nullable=False)
+    __table_args__ = (UniqueConstraint("target_id", "version", name="uq_platform_metadata_version"),)
+
+
+class PublishingLog(BaseModel):
+    __tablename__ = "publishing_logs"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    post_id: Mapped[str | None] = mapped_column(ForeignKey("publishing_posts.id", ondelete="SET NULL"), index=True)
+    target_id: Mapped[str | None] = mapped_column(ForeignKey("publishing_targets.id", ondelete="SET NULL"), index=True)
+    action: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON)

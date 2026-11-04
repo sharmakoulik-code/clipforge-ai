@@ -11,6 +11,8 @@ from app.api.health import router as health_router
 from app.api.jobs import router as jobs_router
 from app.api.projects import router as projects_router
 from app.api.preferences import router as preferences_router
+from app.api.social_accounts import router as social_accounts_router
+from app.api.social_publishing import router as social_publishing_router
 from app.core.config import settings
 from app.core.upload_limit import UploadLimitMiddleware
 
@@ -29,6 +31,8 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(preferences_router)
+app.include_router(social_accounts_router)
+app.include_router(social_publishing_router)
 app.include_router(admin_router)
 app.include_router(billing_router)
 app.include_router(projects_router)

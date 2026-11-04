@@ -43,6 +43,27 @@ def add_credits(db: Session, user_id: str, amount: int, transaction_type: str, *
     return transaction
 
 
+def charge_credits(db: Session, user_id: str, amount: int, *, idempotency_key: str,
+                   transaction_type: str, description: str) -> CreditTransaction:
+    if amount <= 0:
+        raise ValueError("Credit charges must be positive.")
+    existing = db.query(CreditTransaction).filter_by(idempotency_key=idempotency_key).first()
+    if existing:
+        return existing
+    wallet = ensure_wallet(db, user_id)
+    changed = db.execute(update(CreditWallet).where(CreditWallet.id == wallet.id, CreditWallet.balance >= amount)
+                          .values(balance=CreditWallet.balance - amount))
+    if changed.rowcount != 1:
+        raise InsufficientCredits()
+    db.refresh(wallet)
+    transaction = CreditTransaction(wallet_id=wallet.id, amount=-amount, balance_after=wallet.balance,
+                                    transaction_type=transaction_type, idempotency_key=idempotency_key,
+                                    description=description[:512])
+    db.add(transaction)
+    db.flush()
+    return transaction
+
+
 def ensure_free_allocation(db: Session, user_id: str) -> None:
     plan_key, plan = get_user_plan(db, user_id)
     if plan_key != "free":

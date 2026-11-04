@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_publishable_key: str = ""
     stripe_webhook_secret: str = ""
+    social_token_encryption_key: str = ""
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    google_oauth_redirect_uri: str = ""
+    social_schedule_poll_seconds: int = 30
 
     model_config = SettingsConfigDict(
         env_file=Path(__file__).resolve().parents[3] / ".env",
@@ -71,12 +76,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> "Settings":
+        oauth_values = (self.google_oauth_client_id, self.google_oauth_client_secret, self.google_oauth_redirect_uri)
+        if any(oauth_values) and not all(oauth_values):
+            raise ValueError("Configure the Google OAuth client ID, secret, and redirect URI together.")
+        if all(oauth_values) and not self.social_token_encryption_key:
+            raise ValueError("SOCIAL_TOKEN_ENCRYPTION_KEY is required before enabling social OAuth.")
         if self.app_env.lower() not in {"production", "prod"}:
             return self
         if self.secret_key == "development-only-change-me" or len(self.secret_key) < 32:
             raise ValueError("Production requires a unique SECRET_KEY of at least 32 characters.")
         if not self.frontend_url.startswith("https://"):
             raise ValueError("Production FRONTEND_URL must use HTTPS.")
+        if self.google_oauth_redirect_uri and not self.google_oauth_redirect_uri.startswith("https://"):
+            raise ValueError("Production Google OAuth redirect URI must use HTTPS.")
         if self.database_url.startswith("sqlite"):
             raise ValueError("Production requires PostgreSQL; SQLite is for local development only.")
         if not self.redis_url.startswith(("redis://", "rediss://")):

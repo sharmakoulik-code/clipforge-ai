@@ -27,6 +27,10 @@ def client(tmp_path, monkeypatch) -> Iterator[TestClient]:
 
     Base.metadata.create_all(engine)
     test_sessions = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    from app.social.providers import seed_provider_catalog
+    with test_sessions() as seed_db:
+        seed_provider_catalog(seed_db)
+        seed_db.commit()
 
     def override_get_db():
         session = test_sessions()
