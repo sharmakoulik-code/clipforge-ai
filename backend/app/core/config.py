@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     transcription_provider: str = "faster-whisper"
     storage_provider: str = "local"
     local_storage_path: str = "./data/uploads"
+    max_upload_bytes: int = 2 * 1024 * 1024 * 1024
+    trusted_proxy_cidrs: str = "127.0.0.1/32,::1/128,172.16.0.0/12"
+    session_ttl_seconds: int = 14 * 24 * 60 * 60
+    password_reset_ttl_seconds: int = 60 * 60
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "AI Video Repurposer"
+    smtp_starttls: bool = True
     openai_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""

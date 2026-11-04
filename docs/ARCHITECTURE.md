@@ -1,25 +1,41 @@
-# Architecture (Stage 1)
+# Architecture
 
 ## System overview
 
-The repository is a modular monorepo. The Next.js App Router frontend is a same-origin-friendly web client; FastAPI owns the public API, authentication boundary, authorization, business rules, and all provider credentials. The frontend calls relative `/api` routes by default. Next.js rewrites those requests server-side to `BACKEND_INTERNAL_URL` (Compose uses the backend service name); production should route `/api/*` through its trusted reverse proxy. Never expose provider or storage secrets to `NEXT_PUBLIC_*` variables.
+The repository is a modular monorepo. Next.js App Router serves the marketing site and authenticated workspace; FastAPI owns authentication, authorization, project/video metadata, dashboard data, uploads, and job orchestration. The browser calls same-origin relative `/api` routes. Next.js rewrites them server-side to `BACKEND_INTERNAL_URL` (Compose uses `http://backend:8000`); production should route `/api/*` through a trusted reverse proxy. Provider credentials remain server-side and are never placed in `NEXT_PUBLIC_*` variables.
 
-## Responsibilities and data flow
+## Stage 2 boundaries
 
-- **Frontend:** React/TypeScript, strict mode, Tailwind, Lucide, and the selected client libraries (TanStack Query for remote state, Zustand for small UI state, React Hook Form and Zod for forms). Current UI is a static foundation page, not a product dashboard.
-- **API and auth:** FastAPI with Pydantic request/response schemas. Stage 1 deliberately does not implement login. Stage 2 should add a standards-based OIDC or email auth flow, short-lived access credentials, secure HTTP-only cookies, CSRF protection for cookie-authenticated mutations, and per-resource authorization. Passwords (if local auth is added) must be Argon2/bcrypt hashes only.
-- **Database:** PostgreSQL with SQLAlchemy 2 and Alembic. UUID-like string primary keys are used for portability. Foreign keys and uniqueness constraints encode ownership and idempotency boundaries. Source and generated media are object-storage keys, never database blobs.
-- **Uploads/storage:** API issues short-lived, constrained signed upload URLs for S3-compatible object storage; clients upload directly. Persist object key, size, checksum, MIME type, and metadata, then enqueue processing only after upload completion and validation. Local storage is development-only.
-- **AI integrations:** provider adapters under `backend/app/ai/`; secrets remain server-side. Store provider/model, prompt/version metadata, and normalized output for traceability. Retry transient rate limits with bounded exponential backoff; do not retry invalid input or policy errors.
-- **Background jobs:** Celery + Redis. API creates a durable ProcessingJob and ordered ProcessingStages, then enqueues an ID. Workers claim work idempotently; each stage writes status, output references, and a checkpoint before advancing. Redis is transport, not the source of truth.
-- **Video processing:** isolated workers with FFmpeg/FFprobe and optional OpenCV/MediaPipe. Pipeline: Video Upload → Metadata Extraction → Audio Extraction → Transcription → AI Highlight Detection → Speaker Tracking → Vertical Cropping → Caption Generation → FFmpeg Rendering → Output Validation → Download. Model each step as a separately retryable stage. Write intermediates to object storage and checkpoints to the DB; resume from last completed stage, use deterministic output keys, validate codec/dimensions/duration before publishing, and clean up expired temporary artifacts.
-- **Credits/billing:** CreditWallet is a cached balance; append-only CreditTransactions are the ledger. Reserve credits idempotently before expensive processing, settle actual usage or release reservations after completion/failure. Stripe events are deduplicated in WebhookEvents and processed asynchronously. Stage 1 defines data only; no charge or credit endpoints exist.
-- **Administration:** role/permission checks on API endpoints; SystemConfiguration stores non-secret operational settings. Secrets belong in a secret manager/environment, never this table or logs. Admin actions should be auditable before shipping admin features.
+### Frontend
 
-## Model relationships
+React/TypeScript strict mode, Tailwind with a class-driven light/dark theme, Lucide, TanStack Query for server state, Zustand for small UI state, React Hook Form/Zod dependencies, reusable UI primitives, and centralized typed API services. Public routes provide marketing, FAQ, and pricing preview. Protected routes query `/api/auth/me` and show dashboard, upload, project detail, and account settings. API cookies are same-origin and auth expiry returns the browser to sign-in. Upload uses `XMLHttpRequest` for transfer progress and cancellation.
 
-Users own Projects, wallets, subscriptions, payments, and usage. Projects hold source object references and have Transcripts, Clips, ProcessingJobs, and usage. Jobs have ordered ProcessingStages and resumable ProcessingCheckpoints. Clips refer to optional transcripts and have versioned ClipEdits and ClipRenderVersions. Wallets have append-only CreditTransactions. WebhookEvents are provider-event-idempotent; SystemConfigurations are keyed configuration records.
+### Authentication and authorization
 
-## Resilience and operational boundaries
+Registration hashes passwords with Argon2id. Login creates a high-entropy opaque token, stores only its SHA-256 digest in `user_sessions`, and sends the token in an HTTP-only, SameSite=Lax cookie (Secure in production). Sessions are expiring and revocable. Mutating authenticated requests require a signed double-submit CSRF cookie and matching `X-CSRF-Token` header. Protected project/job queries always filter through the authenticated user; inaccessible IDs return 404. `is_admin` and an admin-only API dependency are established; there is no public role escalation. Login, registration, reset, upload, and URL import have in-process rate limits. Production with multiple API workers should move these limits to Redis or an edge gateway.
 
-Use request IDs and structured logs; never log secrets or signed URLs. API liveness (`/health`) is separate from readiness (`/health/ready`). Worker health and queue depth need deployment monitoring. Apply upload limits, content sniffing, malware scanning policy, signed URL expiry, tenant quotas, database transaction boundaries, retry caps, dead-letter handling, and retention controls before production. Stage 1 contains scaffolding only; authentication, real upload, rendering, external AI, payments, and admin workflows are intentionally out of scope.
+Password reset tokens are random, stored only as hashes, expire, are one-use, and revoke current sessions. Development returns the token for local use. Production sends it through the configured SMTP adapter; SMTP host/from details and credentials must be configured. Email delivery is not enabled in this workspace without real SMTP settings.
+
+### Persistence and object storage
+
+PostgreSQL is the production database, accessed through SQLAlchemy 2 sessions and Alembic. SQLite remains a local/test fallback. `users`, `projects`, `processing_jobs`, and pipeline foundations are linked by foreign keys; uploaded bytes never go into PostgreSQL. The local storage adapter uses generated UUID-based keys, confines resolved paths to its configured root, and streams upload chunks to disk. Compose mounts a persistent media volume shared by API and workers. The adapter protocol is the extension point for a future S3/R2 implementation; only local storage is implemented now.
+
+Uploads accept a configured size cap (2 GiB default), an allowlist of video container extensions, container signature checks, and FFprobe validation. User filenames are sanitized for display and never form storage paths. FFprobe extracts duration, dimensions, normalized aspect ratio, frame rate, video/audio codec information, and file size. An ASGI upload-body middleware rejects oversized requests before multipart parsing. Delete removes the project-owned local source after the DB delete commits.
+
+### YouTube references
+
+URLs are strictly parsed for approved YouTube hosts and video URL shapes; the user must confirm rights. The server may request public metadata through YouTube's oEmbed endpoint. It does not download video, scrape private content, bypass DRM/access controls, or use `yt-dlp`. A YouTube reference becomes an `awaiting_upload` project; the user must upload an authorized source before processing.
+
+### Jobs and future processing
+
+FastAPI persists `ProcessingJob`/`ProcessingStage` records before publishing a Celery message to Redis. The worker validates the source key and marks the upload-ready checkpoint; jobs stay `queued` at `awaiting_stage_3`. If Redis is offline at dispatch, a persisted job is marked failed with `queue_unavailable` and can be retried when the worker is available. Job and retry endpoints enforce project ownership. Dashboard polling reads backend state.
+
+The future processing state vocabulary is `queued`, `uploading`, `extracting_audio`, `transcribing`, `analyzing`, `detecting_speakers`, `cropping`, `captioning`, `rendering`, `completed`, and `failed`. Stage 3 will implement the pipeline: Video Upload → Metadata Extraction → Audio Extraction → Transcription → AI Highlight Detection → Speaker Tracking → Vertical Cropping → Caption Generation → FFmpeg Rendering → Output Validation → Download. Each stage should be independently retryable, checkpoint its inputs/outputs and artifacts, and use deterministic object keys. The Stage 2 worker deliberately does not run AI or render clips.
+
+### Dashboard, credits, billing, and admin
+
+Dashboard counters, processing history, project lists, and export lists come from database queries scoped to the current user. Wallet/transaction, subscription, payment, edit, render, webhook, usage, and system configuration models remain available from Stage 1. No real billing, credit charging, clip editor, or admin console is implemented in Stage 2.
+
+## Operational requirements before production
+
+Use TLS, a secret manager, non-default DB/Redis credentials, backups, structured request-aware logs, worker/queue monitoring, and distributed rate limiting. Configure SMTP for password resets. Add malware scanning and stronger codec/size/duration policies as needed. Test migrations on the exact PostgreSQL deployment version. Set trusted proxy CIDRs narrowly. Production object storage, upload resumability, registration email verification, audit events, and AI adapters remain future hardening/work items.
