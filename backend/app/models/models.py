@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -28,6 +28,7 @@ class User(BaseModel):
     provider_subject: Mapped[str | None] = mapped_column(String(255), unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class UserSession(BaseModel):
@@ -91,6 +92,13 @@ class ProcessingJob(BaseModel):
     current_stage: Mapped[str | None] = mapped_column(String(64))
     progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_completed_stage: Mapped[str | None] = mapped_column(String(64))
+    worker_id: Mapped[str | None] = mapped_column(String(160))
+    worker_task_id: Mapped[str | None] = mapped_column(String(160))
+    worker_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    failure_class: Mapped[str | None] = mapped_column(String(32))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(80))
     error_message: Mapped[str | None] = mapped_column(Text)
     options: Mapped[dict | None] = mapped_column(JSON)
@@ -128,6 +136,21 @@ class CreditWallet(BaseModel):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     balance: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    __table_args__ = (CheckConstraint("balance >= 0", name="ck_credit_wallet_balance_nonnegative"),
+                      CheckConstraint("reserved >= 0", name="ck_credit_wallet_reserved_nonnegative"))
+
+
+class CreditReservation(BaseModel):
+    __tablename__ = "credit_reservations"
+    job_id: Mapped[str] = mapped_column(ForeignKey("processing_jobs.id", ondelete="CASCADE"), unique=True, nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False)
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumed: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="reserved", nullable=False)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("amount > 0", name="ck_credit_reservation_amount_positive"),
+                      CheckConstraint("consumed >= 0 AND consumed <= amount", name="ck_credit_reservation_consumed_range"))
 
 
 class CreditTransaction(BaseModel):
@@ -202,6 +225,21 @@ class UsageRecord(BaseModel):
     unit: Mapped[str] = mapped_column(String(32), nullable=False)
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_json: Mapped[dict | None] = mapped_column(JSON)
+
+
+class UserPreference(BaseModel):
+    __tablename__ = "user_preferences"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class AuditLog(BaseModel):
+    __tablename__ = "audit_logs"
+    actor_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    action: Mapped[str] = mapped_column(String(120), index=True, nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(80))
+    target_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    details: Mapped[dict | None] = mapped_column(JSON)
 
 
 class SystemConfiguration(BaseModel):

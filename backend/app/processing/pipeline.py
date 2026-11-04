@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.models.models import Clip, ClipRenderVersion, ProcessingCheckpoint, ProcessingJob, ProcessingStage, Project, Transcript, UsageRecord
+from app.models.models import Clip, ClipRenderVersion, ProcessingCheckpoint, ProcessingJob, ProcessingStage, Project, SystemConfiguration, Transcript, UsageRecord
 from app.storage.local import storage
 from app.video.analysis import AnalysisError, analyze_transcript, resolve_analysis_model
 from app.video.captions import generate_ass
@@ -84,6 +84,7 @@ def _stage_start(db: Session, job: ProcessingJob, name: str, sequence: int) -> P
     stage.error_message = None
     job.status = "processing"
     job.current_stage = name
+    job.worker_heartbeat_at = _now()
     job.progress = max(job.progress, STAGE_PROGRESS.get(name, 5))
     job.error_code = None
     job.error_message = None
@@ -96,6 +97,8 @@ def _stage_done(db: Session, job: ProcessingJob, stage: ProcessingStage, output:
     stage.output_data = output
     stage.completed_at = _now()
     _save_checkpoint(db, job.id, stage.name, output, artifact)
+    job.last_completed_stage = stage.name
+    job.worker_heartbeat_at = _now()
     job.progress = max(job.progress, STAGE_PROGRESS.get(stage.name, job.progress))
     db.commit()
 
@@ -130,6 +133,11 @@ def _record_usage(db: Session, job: ProcessingJob, project: Project, metric: str
     db.add(UsageRecord(user_id=project.owner_id, project_id=project.id, metric=metric, quantity=quantity, unit=unit, metadata_json=metadata))
 
 
+def _active_provider_config(db: Session) -> dict[str, Any]:
+    row = db.query(SystemConfiguration).filter_by(key="ai_providers").first()
+    return row.value if row and isinstance(row.value, dict) else {}
+
+
 def _audio_stage(db: Session, job: ProcessingJob, project: Project, source: Path) -> dict[str, Any]:
     cached = _stage_cached(db, job, "audio_extraction")
     if cached:
@@ -151,8 +159,9 @@ def _transcript_stage(db: Session, job: ProcessingJob, project: Project, audio_k
     stage_cached = _stage_cached(db, job, "transcription")
     audio_path = storage.resolve(audio_key)
     audio_hash = file_sha256(audio_path)
-    provider = str((job.options or {}).get("transcription_provider") or settings.transcription_provider)
-    model = str((job.options or {}).get("transcription_model") or "")
+    provider_config = _active_provider_config(db)
+    provider = str((job.options or {}).get("transcription_provider") or provider_config.get("transcription_provider") or settings.transcription_provider)
+    model = str((job.options or {}).get("transcription_model") or provider_config.get("transcription_model") or "")
     if stage_cached and stage_cached.get("transcript_id"):
         transcript_row = db.get(Transcript, stage_cached["transcript_id"])
         if transcript_row and transcript_row.status == "completed" and transcript_row.segments:
@@ -187,12 +196,21 @@ def _analysis_stage(db: Session, job: ProcessingJob, project: Project, transcrip
     min_duration = max(5, min(180, int(options.get("min_clip_seconds", settings.processing_min_clip_seconds))))
     max_duration = max(min_duration, min(180, int(options.get("max_clip_seconds", settings.processing_max_clip_seconds))))
     count = max(1, min(settings.processing_max_clips, int(options.get("num_clips", 3))))
-    provider = str(options.get("ai_provider") or settings.ai_provider).lower()
+    provider_config = _active_provider_config(db)
+    default_provider = str(provider_config.get("ai_provider") or settings.ai_provider).lower()
+    provider = str(options.get("ai_provider") or default_provider).lower()
     configured_model = options.get("ai_model")
-    if not configured_model and provider == settings.ai_provider.lower():
-        configured_model = settings.ai_model
+    if not configured_model and provider == default_provider:
+        configured_model = provider_config.get("ai_model") or settings.ai_model
     model = resolve_analysis_model(provider, str(configured_model or ""))
+    fallback_provider = str(provider_config.get("fallback_provider") or "").lower()
+    if fallback_provider == provider or fallback_provider not in {"openai", "openai-compatible", "gemini", "claude"}:
+        fallback_provider = ""
+    fallback_model = resolve_analysis_model(fallback_provider, str(provider_config.get("fallback_model") or "")) if fallback_provider else ""
+    max_attempts = max(1, min(6, int(provider_config.get("max_retries", 2)) + 1))
+    timeout_seconds = max(5, min(600, int(provider_config.get("timeout_seconds", 120))))
     signature_data = {"transcript_id": transcript_row.id, "provider": provider, "model": model,
+                      "fallback_provider": fallback_provider, "fallback_model": fallback_model,
                       "minimum": min_duration, "maximum": max_duration, "count": count}
     analysis_hash = hashlib.sha256(json.dumps(signature_data, sort_keys=True).encode()).hexdigest()
     cached = _stage_cached(db, job, "transcript_analysis")
@@ -213,9 +231,19 @@ def _analysis_stage(db: Session, job: ProcessingJob, project: Project, transcrip
     stage = _stage_start(db, job, "transcript_analysis", 6)
     if result is None:
         try:
-            result = analyze_transcript(transcript, duration, min_duration, max_duration, count, provider, model or None)
+            result = analyze_transcript(transcript, duration, min_duration, max_duration, count,
+                                        provider, model or None, max_attempts=max_attempts, timeout_seconds=timeout_seconds)
         except AnalysisError as exc:
-            raise ProcessingFailure(exc.code, str(exc), exc.retryable) from exc
+            if not fallback_provider or not exc.retryable:
+                raise ProcessingFailure(exc.code, str(exc), exc.retryable) from exc
+            try:
+                result = analyze_transcript(transcript, duration, min_duration, max_duration, count,
+                                            fallback_provider, fallback_model or None, max_attempts=max_attempts, timeout_seconds=timeout_seconds)
+                result["fallback_from"] = provider
+            except AnalysisError as fallback_exc:
+                raise ProcessingFailure(fallback_exc.code, str(fallback_exc), fallback_exc.retryable) from fallback_exc
+    result_provider = str(result.get("provider", provider))
+    result_model = str(result.get("model", model))
     analysis_key = _artifact_key(project.id, f"analysis-{transcript_row.id}-{analysis_hash[:12]}.json")
     if not storage.exists(analysis_key):
         _write_json(analysis_key, result)
@@ -226,7 +254,9 @@ def _analysis_stage(db: Session, job: ProcessingJob, project: Project, transcrip
             clip_ids.append(existing.id)
             continue
         metadata = {**clip_data, "duration_seconds": clip_data["end_time"] - clip_data["start_time"],
-                    "analysis_provider": provider, "analysis_model": model, "analysis_hash": analysis_hash}
+                    "original_start_time": clip_data["start_time"], "original_end_time": clip_data["end_time"],
+                    "crop_settings": {"mode": "auto", "center_x": 0.5, "center_y": 0.5, "zoom": 1.0, "auto_speaker_center": True},
+                    "analysis_provider": result_provider, "analysis_model": result_model, "analysis_hash": analysis_hash}
         if existing:
             existing.title = clip_data["title"]
             existing.score = clip_data["viral_score"]
@@ -243,7 +273,7 @@ def _analysis_stage(db: Session, job: ProcessingJob, project: Project, transcrip
             db.flush()
             clip_ids.append(clip.id)
     if not used_cache:
-        _record_usage(db, job, project, "llm_analysis_requests", int(result.get("provider_requests", 1)), "request", {"provider": provider, "model": model})
+        _record_usage(db, job, project, "llm_analysis_requests", int(result.get("provider_requests", 1)), "request", {"provider": result_provider, "model": result_model, "fallback_from": result.get("fallback_from")})
     _stage_done(db, job, stage, {"artifact_key": analysis_key, "clip_ids": clip_ids, "count": len(result["clips"]), "analysis_hash": analysis_hash}, analysis_key)
     return result
 
@@ -279,11 +309,14 @@ def _caption_stage(db: Session, job: ProcessingJob, project: Project, transcript
     rows = db.query(Clip).filter_by(project_id=project.id).order_by(Clip.start_seconds).all()
     style = str((job.options or {}).get("caption_style", "creator"))
     caption_options = (job.options or {}).get("caption_options") or {}
+    profile = (job.options or {}).get("render_profile") or {}
+    render_width = int(profile.get("width", settings.render_width))
+    render_height = int(profile.get("height", settings.render_height))
     for clip in rows:
         key = _artifact_key(project.id, f"captions/{clip.id}.ass")
         path = storage.resolve(key)
         generate_ass(transcript, path, float(clip.start_seconds), float(clip.end_seconds), style, caption_options,
-                     settings.render_width, settings.render_height)
+                     render_width, render_height)
         storage.commit(key)
         result[clip.id] = key
         metadata = dict(clip.metadata_json or {})
@@ -306,6 +339,10 @@ def _render_stage(db: Session, job: ProcessingJob, project: Project, source: Pat
     stage = _stage_start(db, job, "rendering", 9)
     clips = db.query(Clip).filter_by(project_id=project.id).order_by(Clip.start_seconds).all()
     total_clips = max(1, len(clips))
+    profile = (job.options or {}).get("render_profile") or {}
+    render_width = int(profile.get("width", settings.render_width))
+    render_height = int(profile.get("height", settings.render_height))
+    watermark = bool(profile.get("watermark", False))
     for index, clip in enumerate(clips):
         job.current_stage = f"rendering_clip_{index + 1}_of_{len(clips)}"
         job.progress = max(job.progress, 70 + int(27 * index / total_clips))
@@ -322,12 +359,16 @@ def _render_stage(db: Session, job: ProcessingJob, project: Project, source: Pat
             db.commit()
             continue
         caption_path = storage.resolve(captions[clip.id])
-        result = render_clip(source, output_path, float(clip.start_seconds), float(clip.end_seconds), crops[clip.id], caption_path, thumb_path, preview_path)
+        result = render_clip(source, output_path, float(clip.start_seconds), float(clip.end_seconds), crops[clip.id], caption_path, thumb_path, preview_path,
+                             width=render_width, height=render_height, watermark=watermark)
         storage.commit(video_key)
         storage.commit(thumb_key)
         storage.commit(preview_key)
         metadata = dict(clip.metadata_json or {})
-        metadata.update({"thumbnail_key": thumb_key, "preview_key": preview_key, "render_validation": result, "duration_seconds": result["duration_seconds"]})
+        metadata.update({"thumbnail_key": thumb_key, "preview_key": preview_key, "render_validation": result,
+                         "duration_seconds": result["duration_seconds"], "active_render_version": 1,
+                         "rendered_start_time": float(clip.start_seconds), "rendered_end_time": float(clip.end_seconds),
+                         "watermark": watermark})
         clip.metadata_json = metadata
         clip.output_video_key = video_key
         clip.status = "completed"
@@ -337,8 +378,20 @@ def _render_stage(db: Session, job: ProcessingJob, project: Project, source: Pat
             db.add(render)
         render.output_key = video_key
         render.status = "completed"
+        render.render_settings = {"width": render_width, "height": render_height, "fps": settings.render_fps,
+                                 "bitrate": settings.render_video_bitrate, "watermark": watermark, "thumbnail_key": thumb_key,
+                                 "preview_key": preview_key, "crop_key": (clip.metadata_json or {}).get("crop_key"),
+                                 "caption_key": captions[clip.id], "start_time": float(clip.start_seconds),
+                                 "end_time": float(clip.end_seconds), "crop_settings": (clip.metadata_json or {}).get("crop_settings", {"mode": "auto"}),
+                                 "caption_style": (clip.metadata_json or {}).get("caption_style", "creator"),
+                                 "caption_options": (clip.metadata_json or {}).get("caption_options", {}),
+                                 "caption_segments": (clip.metadata_json or {}).get("caption_segments"),
+                                 "title": clip.title,
+                                 "description": (clip.metadata_json or {}).get("description", ""),
+                                 "hashtags": (clip.metadata_json or {}).get("hashtags", []),
+                                 "export_filename": (clip.metadata_json or {}).get("export_filename", ""),
+                                 "hide_captions": bool((clip.metadata_json or {}).get("hide_captions", False))}
         render.validation_data = result
-        render.render_settings = {"width": settings.render_width, "height": settings.render_height, "fps": settings.render_fps, "bitrate": settings.render_video_bitrate}
         job.progress = max(job.progress, 70 + int(27 * (index + 1) / total_clips))
         db.commit()
     clip_ids = [clip.id for clip in clips]
@@ -360,6 +413,9 @@ def run_processing_job(job_id: str, session_factory: sessionmaker[Session] = Ses
         job.status = "processing"
         job.started_at = job.started_at or _now()
         job.error_code = job.error_message = None
+        job.failure_class = None
+        job.dead_lettered_at = None
+        job.worker_heartbeat_at = _now()
         project.status = "processing"
         db.commit()
 
@@ -395,6 +451,8 @@ def run_processing_job(job_id: str, session_factory: sessionmaker[Session] = Ses
         _save_checkpoint(db, job.id, active_stage, validation_stage.output_data)
         job.status = "completed"
         job.current_stage = "completed"
+        job.last_completed_stage = active_stage
+        job.worker_heartbeat_at = _now()
         job.progress = 100
         job.completed_at = _now()
         project.status = "completed"
@@ -413,6 +471,10 @@ def run_processing_job(job_id: str, session_factory: sessionmaker[Session] = Ses
             job.current_stage = active_stage
             job.error_code = exc.code
             job.error_message = str(exc)
+            job.failure_class = "transient" if exc.retryable else "permanent"
+            if not exc.retryable:
+                job.dead_lettered_at = _now()
+            job.worker_heartbeat_at = _now()
             job.completed_at = _now()
             if project:
                 project.status = "failed"
@@ -433,6 +495,8 @@ def run_processing_job(job_id: str, session_factory: sessionmaker[Session] = Ses
             job.error_code = getattr(exc, "code", "processing_failed")
             job.error_message = (str(exc)[:1000] if isinstance(exc, (MediaError, TranscriptionError, AnalysisError)) else
                                 "Processing stopped due to an unexpected worker error. Completed intermediate stages are retained for retry.")
+            job.failure_class = "transient"
+            job.worker_heartbeat_at = _now()
             job.completed_at = _now()
             if project:
                 project.status = "failed"

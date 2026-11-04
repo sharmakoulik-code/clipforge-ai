@@ -2,17 +2,20 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import enforce_rate_limit
+from app.billing.credits import ensure_free_allocation
 from app.core.security import (
     SESSION_COOKIE, clear_session_cookie, create_opaque_token, get_current_session,
     get_current_user, hash_password, hash_secret, set_session_cookie, verify_password,
 )
-from app.models.models import CreditWallet, PasswordResetToken, User, UserSession
+from app.models.models import CreditWallet, PasswordResetToken, Project, User, UserSession
+from app.storage.local import storage
 from app.services.email import send_password_reset_email
 from app.schemas.api import (
     LoginRequest, PasswordResetConfirm, PasswordResetRequest, ProfileUpdate,
@@ -21,6 +24,16 @@ from app.schemas.api import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=12, max_length=128)
+
+
+class AccountDeleteRequest(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+    confirmation: str = Field(min_length=1, max_length=32)
 
 
 def _new_session(db: Session, user: User, response: Response) -> None:
@@ -46,6 +59,7 @@ def register(payload: RegisterRequest, request: Request, response: Response, db:
         db.flush()
         db.add(CreditWallet(user_id=user.id, balance=0, reserved=0))
         db.flush()
+        ensure_free_allocation(db, user.id)
         _new_session(db, user, response)
         db.refresh(user)
         return user
@@ -63,6 +77,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: Sessi
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email or password is incorrect")
     if not user.is_active:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is disabled")
+    user.last_login_at = datetime.now(timezone.utc)
     _new_session(db, user, response)
     return user
 
@@ -94,6 +109,48 @@ def update_profile(payload: ProfileUpdate, user: User = Depends(get_current_user
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/password/change", status_code=status.HTTP_204_NO_CONTENT)
+def change_password(payload: PasswordChangeRequest, request: Request, response: Response,
+                    session: tuple[User, UserSession] = Depends(get_current_session),
+                    db: Session = Depends(get_db)) -> Response:
+    enforce_rate_limit(request, scope="password-change", limit=5)
+    user, current_session = session
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    user.password_hash = hash_password(payload.new_password)
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for old_session in db.query(UserSession).filter(UserSession.user_id == user.id, UserSession.revoked_at.is_(None), UserSession.id != current_session.id).all():
+        old_session.revoked_at = now
+    db.commit()
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
+
+
+@router.delete("/account", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(payload: AccountDeleteRequest, request: Request, response: Response,
+                   session: tuple[User, UserSession] = Depends(get_current_session),
+                   db: Session = Depends(get_db)) -> Response:
+    enforce_rate_limit(request, scope="account-delete", limit=2)
+    user, _ = session
+    if payload.confirmation != "DELETE" or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Account deletion confirmation or password is incorrect.")
+    owned_projects = db.query(Project).filter_by(owner_id=user.id).all()
+    project_artifacts = [(row.id, row.source_video_key) for row in owned_projects]
+    db.delete(user)
+    db.commit()
+    for project_id, source_key in project_artifacts:
+        try:
+            if source_key:
+                storage.delete(source_key)
+            storage.delete_prefix(f"artifacts/{project_id}")
+        except Exception:
+            logger.exception("Account deletion artifact cleanup failed user_id=%s project_id=%s", user.id, project_id)
+    clear_session_cookie(response)
+    response.status_code = status.HTTP_204_NO_CONTENT
+    return response
 
 
 @router.post("/password-reset", status_code=status.HTTP_202_ACCEPTED)

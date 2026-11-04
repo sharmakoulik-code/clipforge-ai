@@ -14,7 +14,7 @@ def test_failed_job_can_be_retried_and_status_is_persisted(client: TestClient, m
         "codec": "h264", "container": "mp4", "audio_streams": 0, "audio_codecs": [],
         "aspect_ratio": "1280:720", "file_size_bytes": 20,
     })
-    monkeypatch.setattr(job_queue, "enqueue_uploaded_project", lambda _job_id: False)
+    monkeypatch.setattr(job_queue, "enqueue_uploaded_project", lambda _job_id, *_args: False)
     response = client.post("/api/projects/upload", files={"file": ("retry.mp4", b"\x00\x00\x00\x18ftypisom" + b"a" * 8, "video/mp4")})
     assert response.status_code == 201, response.text
     job_id = response.json()["job"]["id"]

@@ -1,77 +1,69 @@
-# AI Video Repurposer
+# ClipForge AI — AI Video Repurposer
 
-Stage 2 of a four-stage project: an original creator SaaS shell with public marketing pages, account/session security, database-backed dashboard, local video ingestion, video metadata, ownership-scoped projects, and an asynchronous Celery/Redis job foundation. The actual transcription, highlight detection, clip editor/rendering, billing, and admin console are intentionally not implemented yet.
+ClipForge turns rights-cleared long-form video uploads into vertical short clips with captions and an interactive post-processing editor. This repository has evolved through four stages: the account/dashboard foundation, secure ingestion, resumable AI/video processing, and SaaS/editor foundations. See [Stage 2](docs/STAGE2.md), [Stage 3](docs/STAGE3.md), and [Stage 4](docs/STAGE4.md) for scope and verification boundaries.
+
+> **Launch status:** local implementation and automated checks are available, but this is not a verified production deployment. Docker/Compose, live AI providers, Stripe, SMTP, cloud storage, and production operations have not been end-to-end tested. Stripe live keys are rejected in production configuration. Do not deploy publicly, enable live payments, or incur paid service charges without explicit approval.
 
 ## Repository layout
 
 ```text
-frontend/                 Next.js 16 App Router, React, TypeScript, Tailwind
-  app/                     Marketing, auth, dashboard, upload, project, settings routes
-  components/              Reusable theme, auth, dashboard and UI components
-  lib/ services/            Client utilities and typed API/upload services
-  store/ hooks/             State and extension points
-backend/
-  app/api/                  Auth, project/upload, dashboard, job and admin-health routes
-  app/core/                 Settings, database, security, rate limiting, upload guard
-  app/models/               SQLAlchemy persistence models
-  app/{ai,video,workers,storage,billing}/ modular adapters and task extensions
-  migrations/versions/      Alembic baseline and Stage 2 migration
-  tests/                    Backend tests
-docs/ARCHITECTURE.md       Current architecture and Stage 3 boundaries
-docs/STAGE2.md             Delivered features, verification and remaining limits
-docs/ENVIRONMENT.md        Arena/GitHub capability report
-docker-compose.yml         Frontend, API, worker, PostgreSQL, Redis
-.env.example               Configuration template; no credentials
+frontend/                 Next.js App Router, React, TypeScript, Tailwind
+backend/app/api/           Auth, projects/jobs, clips/editor, billing, preferences, admin
+backend/app/processing/    Resumable video processing pipeline
+backend/app/workers/       Celery jobs, retries and render versioning
+backend/app/billing/       Plan catalog and credit reservations/settlement
+backend/app/storage/       Local and S3-compatible storage adapters
+backend/migrations/        Alembic schema migrations
+backend/tests/             API, billing, editor and pipeline tests
+docs/                      Architecture, environment and staged delivery notes
+docker-compose.yml         Local development stack only
+.env.example               Non-secret local configuration template
 ```
 
 ## Local development
 
-Full-stack development requires Docker Engine and the Docker Compose plugin. Node.js 20+ and Python 3.11+ are required to run the frontend/backend directly. FFmpeg/FFprobe is included in the backend image.
+Requirements: Python 3.11+, Node.js 22+, PostgreSQL, Redis, and FFmpeg/FFprobe. Docker Engine and the Compose plugin are the easiest local stack. The Dockerfiles have production-oriented defaults, while `docker-compose.yml` explicitly overrides the frontend to the Next.js development server and binds published ports to loopback.
 
-1. Copy `.env.example` to `.env`. Set a unique `SECRET_KEY` (at least 16 characters). Keep `.env` private and never commit it.
-2. Start the stack with `docker compose up --build`.
-3. Open the app at <http://localhost:3000>, API docs at <http://localhost:8000/docs>, and readiness at <http://localhost:8000/health/ready>.
-4. Compose migrates the database before the API starts. PostgreSQL, Redis, and uploaded local media use persistent volumes shared with the worker where needed.
+1. Copy `.env.example` to `.env`.
+2. Replace `SECRET_KEY` with a freshly generated value (`python -c 'import secrets; print(secrets.token_urlsafe(48))'`). Set a unique URL-safe `POSTGRES_PASSWORD`; the local Compose URL uses this value directly, so avoid URI-reserved characters unless URL-encoding it.
+3. Run `docker compose up --build` and open <http://localhost:3000>. The API health endpoint is <http://localhost:8000/health/ready>.
+4. Compose applies Alembic migrations before starting the API. PostgreSQL, Redis, uploaded media, and the local ASR model cache use named volumes.
 
-### Run without Docker
+Compose is for development only: its services use development settings and local credentials, even though the database/Redis ports are loopback-bound. Do not expose this stack as a public production deployment.
+
+### Run frontend/backend directly
+
+Create/activate a Python 3.11 virtual environment, install `backend/requirements.txt`, and install frontend dependencies with `npm ci`. Copy `.env.example` to `.env`, provide a unique `SECRET_KEY`, and configure the local PostgreSQL/Redis URLs. Then run:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r backend/requirements.txt
-cp .env.example .env  # then set SECRET_KEY; configure PostgreSQL/Redis if available
-
 (cd backend && PYTHONPATH=. alembic upgrade head)
 (cd backend && PYTHONPATH=. uvicorn app.main:app --reload --host 0.0.0.0 --port 8000)
+# another shell
+(cd backend && PYTHONPATH=. celery -A app.workers.celery_app.celery worker --loglevel=INFO)
+# another shell
+(cd frontend && npm run dev)
 ```
 
-In another shell, run `cd frontend && npm install && npm run dev`. Next.js serves on port 3000 and rewrites relative `/api/*` calls to `BACKEND_INTERNAL_URL` (default `http://127.0.0.1:8000`). The Arena preview currently serves the frontend at port 8001 and the API at port 8002; this is a preview-only port arrangement.
+The frontend proxies relative `/api/*` requests through `BACKEND_INTERNAL_URL` (default `http://127.0.0.1:8000`). The worker and API must share the same database, Redis, storage, and local media/model-cache volumes when using local storage/ASR. Real provider-backed processing requires explicitly configured provider credentials and incurs provider usage charges.
 
-The backend defaults to SQLite for local smoke tests, but production should use PostgreSQL. Redis is required for Celery dispatch and worker processing. Without it, uploads remain persisted and the job is visibly marked `queue_unavailable`; retry after the queue is available. Local video uploads require FFmpeg/FFprobe on the host, or use the included Docker backend image.
+## Configuration and security
 
-## Authentication and security
+- Never commit `.env` or expose API, SMTP, Stripe, storage, or session secrets to browser code.
+- Production mode (`APP_ENV=production`) requires a generated secret of at least 32 characters, HTTPS `FRONTEND_URL`, PostgreSQL, Redis, and SMTP. Use managed secrets, TLS, backups, persistent object storage, and a narrow `TRUSTED_PROXY_CIDRS` in a real deployment.
+- `OPENAI_BASE_URL` supports OpenAI-compatible chat-completions endpoints and must use HTTPS. Keep the endpoint under operator control; provider credentials are sent to it.
+- Stripe remains **test-mode only**. Set only `sk_test_` credentials until a separately approved production release; `sk_live_` is explicitly blocked in production configuration.
+- Rate limits are currently process-local and are not sufficient for a multi-instance deployment. Refer to [Stage 4 launch gaps](docs/STAGE4.md).
+- Password-reset email requires SMTP in production. Development may return a debug reset token to facilitate local testing.
+- YouTube ingestion is public metadata-only. It does not download videos or bypass access controls; upload only assets you are authorized to process.
 
-Registration requires a valid email, display name, and password of at least 12 characters. Passwords use Argon2id. The server stores hashed opaque session tokens and sets HTTP-only, SameSite=Lax cookies (Secure in production); protected mutations also validate a signed CSRF token. Password reset tokens are hashed, single-use, expiring, and revoke sessions. Configure `SMTP_*` for production password-reset delivery; development returns a debug reset token solely to make local testing possible. Never expose SMTP, AI, storage, or payment credentials in frontend variables.
-
-Rate limits are process-local in this stage, not distributed. Configure `TRUSTED_PROXY_CIDRS` narrowly behind a proxy. Local storage is the only implemented storage provider; files are stored outside PostgreSQL under opaque keys and are removed when their project is deleted.
-
-## Stage 2 API surface
-
-- `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
-- `POST /api/auth/password-reset`, `POST /api/auth/password-reset/confirm`, `PATCH /api/auth/profile`
-- `GET /api/dashboard`
-- `POST /api/projects/upload` (multipart), `POST /api/projects/youtube` (metadata reference only)
-- `GET /api/projects`, `GET /api/projects/{project_id}`, `PATCH /api/projects/{project_id}`, `DELETE /api/projects/{project_id}`
-- `GET /api/projects/{project_id}/status`, `GET /api/jobs/{job_id}`, `POST /api/jobs/{job_id}/retry`
-
-The YouTube route may request public oEmbed metadata, but it does not download video or bypass access controls. Users must upload an authorized source file. Stage 3 now runs an independently checkpointed Celery pipeline for audio extraction, configured transcription, LLM clip analysis, face tracking/reframing, captions, FFmpeg rendering, and output validation. Live provider credentials/models are required for real transcript-driven clips; see `docs/STAGE3.md` for verified tests and integration limits.
-
-## Quality checks
+## Checks
 
 ```bash
-(cd frontend && npm run build && npm run lint && npm audit)
+(cd backend && PYTHONPATH=. ../.venv/bin/python -m compileall -q app tests migrations)
 (cd backend && PYTHONPATH=. ../.venv/bin/pytest -q)
-(cd backend && PYTHONPATH=. ../.venv/bin/alembic -c alembic.ini upgrade head)
+(cd backend && PYTHONPATH=. ../.venv/bin/alembic -c alembic.ini upgrade head && PYTHONPATH=. ../.venv/bin/alembic -c alembic.ini check)
+(cd frontend && npm run lint && npm run build)
+git diff --check
 ```
 
-See [`docs/STAGE2.md`](docs/STAGE2.md) for Stage 2 delivery details and [`docs/STAGE3.md`](docs/STAGE3.md) for the AI processing implementation, tests, and remaining live-service limits. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) records current architecture and data ownership.
+See [docs/STAGE4.md](docs/STAGE4.md) for implemented/partial/unverified features and a pre-launch checklist. See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.

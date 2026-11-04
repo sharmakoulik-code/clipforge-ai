@@ -3,10 +3,14 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      target: dev
+      args:
+        BACKEND_INTERNAL_URL: http://backend:8000
+    command: ["npm", "run", "dev"]
     environment:
       BACKEND_INTERNAL_URL: http://backend:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       backend:
         condition: service_healthy
@@ -19,13 +23,15 @@ services:
       - .env
     environment:
       APP_ENV: development
-      DATABASE_URL: postgresql+psycopg://clipforge:clipforge@postgres:5432/clipforge
-      REDIS_URL: redis://redis:6379/0
-      FRONTEND_URL: http://localhost:3000
+      SECRET_KEY: ${SECRET_KEY:?Set a unique SECRET_KEY in .env}
+      DATABASE_URL: postgresql+psycopg://clipforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/clipforge
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - media_data:/app/data/uploads
+      - model_data:/app/data/models
     command: sh -c "alembic -c alembic.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
@@ -56,9 +62,9 @@ services:
     environment:
       POSTGRES_DB: clipforge
       POSTGRES_USER: clipforge
-      POSTGRES_PASSWORD: clipforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -70,7 +76,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -83,3 +89,4 @@ volumes:
   postgres_data:
   redis_data:
   media_data:
+  model_data:

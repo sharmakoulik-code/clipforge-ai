@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     ai_provider: str = "openai"
     ai_model: str = ""
     processing_max_clips: int = 10
+    processing_task_max_retries: int = 3
+    processing_heartbeat_stale_seconds: int = 900
+    processing_job_timeout_seconds: int = 14400
+    celery_worker_concurrency: int = 2
+    credits_per_source_minute: int = 1
+    credits_per_rendered_clip: int = 2
+    free_monthly_credits: int = 60
     processing_min_clip_seconds: int = 20
     processing_max_clip_seconds: int = 60
     video_sample_interval_seconds: float = 1.0
@@ -42,6 +49,7 @@ class Settings(BaseSettings):
     smtp_from_name: str = "AI Video Repurposer"
     smtp_starttls: bool = True
     openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
     aws_access_key_id: str = ""
@@ -60,6 +68,24 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
     )
+
+    @model_validator(mode="after")
+    def validate_production_settings(self) -> "Settings":
+        if self.app_env.lower() not in {"production", "prod"}:
+            return self
+        if self.secret_key == "development-only-change-me" or len(self.secret_key) < 32:
+            raise ValueError("Production requires a unique SECRET_KEY of at least 32 characters.")
+        if not self.frontend_url.startswith("https://"):
+            raise ValueError("Production FRONTEND_URL must use HTTPS.")
+        if self.database_url.startswith("sqlite"):
+            raise ValueError("Production requires PostgreSQL; SQLite is for local development only.")
+        if not self.redis_url.startswith(("redis://", "rediss://")):
+            raise ValueError("Production requires a Redis URL for the job queue.")
+        if self.stripe_secret_key.startswith("sk_live_"):
+            raise ValueError("Live Stripe credentials are disabled; use test-mode keys until explicitly approved.")
+        if not self.smtp_host or not self.smtp_from_email:
+            raise ValueError("Production requires SMTP_HOST and SMTP_FROM_EMAIL for account recovery.")
+        return self
 
 
 @lru_cache

@@ -41,8 +41,9 @@ def test_clip_results_media_edit_and_zip_are_owner_scoped(client: TestClient, mo
     from app.workers.tasks import render_edited_clip
     queued = []
     monkeypatch.setattr(render_edited_clip, "apply_async", lambda args: queued.append(args) or None)
-    assert client.post(f"/api/clips/{clip_id}/render").status_code == 202
-    assert queued == [[clip_id]]
+    rerender = client.post(f"/api/clips/{clip_id}/render")
+    assert rerender.status_code == 202
+    assert queued == [[clip_id, rerender.json()["job_id"]]]
     zipped = client.post(f"/api/projects/{project_id}/clips/download", json=[clip_id])
     assert zipped.status_code == 200 and zipped.headers["content-type"] == "application/zip"
 

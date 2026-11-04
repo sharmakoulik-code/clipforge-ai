@@ -84,7 +84,7 @@ def require_admin(user: User = Depends(get_current_user)) -> User:
 
 
 def set_session_cookie(response, token: str) -> None:
-    secure = settings.app_env == "production"
+    secure = settings.app_env.lower() in {"production", "prod"}
     response.set_cookie(
         key=SESSION_COOKIE,
         value=token,
@@ -107,6 +107,6 @@ def set_session_cookie(response, token: str) -> None:
 
 
 def clear_session_cookie(response) -> None:
-    secure = settings.app_env == "production"
+    secure = settings.app_env.lower() in {"production", "prod"}
     response.delete_cookie(key=SESSION_COOKIE, httponly=True, secure=secure, samesite="lax", path="/")
     response.delete_cookie(key=CSRF_COOKIE, httponly=False, secure=secure, samesite="lax", path="/")

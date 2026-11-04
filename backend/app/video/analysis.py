@@ -64,12 +64,15 @@ def _extract_json(text: str) -> dict[str, Any]:
     return parsed
 
 
-def _request_openai(prompt: str, model: str) -> str:
+def _request_openai(prompt: str, model: str, timeout_seconds: int = 120) -> str:
     if not settings.openai_api_key:
         raise AnalysisError("analysis_credentials_missing", "OPENAI_API_KEY is required for AI highlight analysis.")
     try:
-        response = httpx.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {settings.openai_api_key}"},
-            json={"model": model, "temperature": 0.2, "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": prompt}]}, timeout=httpx.Timeout(120, connect=15))
+        base_url = settings.openai_base_url.rstrip("/")
+        if not base_url.startswith("https://"):
+            raise AnalysisError("analysis_endpoint_invalid", "OpenAI-compatible endpoints must use HTTPS.")
+        response = httpx.post(f"{base_url}/chat/completions", headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+            json={"model": model, "temperature": 0.2, "response_format": {"type": "json_object"}, "messages": [{"role": "user", "content": prompt}]}, timeout=httpx.Timeout(max(5, min(600, timeout_seconds)), connect=min(15, max(3, timeout_seconds // 4))))
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
     except httpx.TimeoutException as exc:
@@ -81,12 +84,12 @@ def _request_openai(prompt: str, model: str) -> str:
         raise AnalysisError("analysis_unavailable", "Could not obtain a valid response from OpenAI.", retryable=True) from exc
 
 
-def _request_gemini(prompt: str, model: str) -> str:
+def _request_gemini(prompt: str, model: str, timeout_seconds: int = 120) -> str:
     if not settings.gemini_api_key:
         raise AnalysisError("analysis_credentials_missing", "GEMINI_API_KEY is required for Gemini analysis.")
     try:
         response = httpx.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={settings.gemini_api_key}",
-            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}, timeout=httpx.Timeout(120, connect=15))
+            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2}}, timeout=httpx.Timeout(max(5, min(600, timeout_seconds)), connect=min(15, max(3, timeout_seconds // 4))))
         response.raise_for_status()
         return "".join(part.get("text", "") for part in response.json()["candidates"][0]["content"]["parts"])
     except httpx.TimeoutException as exc:
@@ -97,12 +100,12 @@ def _request_gemini(prompt: str, model: str) -> str:
         raise AnalysisError("analysis_unavailable", "Could not obtain a valid response from Gemini.", retryable=True) from exc
 
 
-def _request_claude(prompt: str, model: str) -> str:
+def _request_claude(prompt: str, model: str, timeout_seconds: int = 120) -> str:
     if not settings.anthropic_api_key:
         raise AnalysisError("analysis_credentials_missing", "ANTHROPIC_API_KEY is required for Claude analysis.")
     try:
         response = httpx.post("https://api.anthropic.com/v1/messages", headers={"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01"},
-            json={"model": model, "max_tokens": 4096, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]}, timeout=httpx.Timeout(120, connect=15))
+            json={"model": model, "max_tokens": 4096, "temperature": 0.2, "messages": [{"role": "user", "content": prompt}]}, timeout=httpx.Timeout(max(5, min(600, timeout_seconds)), connect=min(15, max(3, timeout_seconds // 4))))
         response.raise_for_status()
         return "".join(part.get("text", "") for part in response.json()["content"] if part.get("type") == "text")
     except httpx.TimeoutException as exc:
@@ -113,13 +116,13 @@ def _request_claude(prompt: str, model: str) -> str:
         raise AnalysisError("analysis_unavailable", "Could not obtain a valid response from Claude.", retryable=True) from exc
 
 
-def _provider_request(prompt: str, provider: str, model: str) -> str:
-    if provider == "openai":
-        return _request_openai(prompt, model)
+def _provider_request(prompt: str, provider: str, model: str, timeout_seconds: int = 120) -> str:
+    if provider in {"openai", "openai-compatible"}:
+        return _request_openai(prompt, model, timeout_seconds)
     if provider == "gemini":
-        return _request_gemini(prompt, model)
+        return _request_gemini(prompt, model, timeout_seconds)
     if provider in {"claude", "anthropic"}:
-        return _request_claude(prompt, model)
+        return _request_claude(prompt, model, timeout_seconds)
     raise AnalysisError("analysis_provider_unsupported", f"Unsupported analysis provider: {provider}.")
 
 
@@ -181,7 +184,7 @@ def resolve_analysis_model(provider: str, model: str | None = None) -> str:
 
 
 def analyze_transcript(transcript: dict[str, Any], duration: float, min_seconds: float, max_seconds: float, count: int,
-                       provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+                       provider: str | None = None, model: str | None = None, max_attempts: int = 2, timeout_seconds: int = 120) -> dict[str, Any]:
     provider = (provider or settings.ai_provider).lower()
     configured_model = model
     if configured_model is None and provider == settings.ai_provider.lower():
@@ -189,9 +192,9 @@ def analyze_transcript(transcript: dict[str, Any], duration: float, min_seconds:
     model = resolve_analysis_model(provider, configured_model)
     prompt = _prompt(transcript, duration, min_seconds, max_seconds, count)
     last_error: AnalysisError | None = None
-    for attempt in range(2):
+    for attempt in range(max(1, min(6, int(max_attempts)))):
         try:
-            response_text = _provider_request(prompt, provider, model)
+            response_text = _provider_request(prompt, provider, model, timeout_seconds)
             raw = _extract_json(response_text)
             clips = _validate(raw, transcript, duration, min_seconds, max_seconds, count)
             return {"provider": provider, "model": model, "provider_requests": attempt + 1, "score_type": "estimated_engagement_not_probability", "clips": clips}

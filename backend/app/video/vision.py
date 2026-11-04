@@ -150,3 +150,29 @@ def track_speakers_and_crops(source: Path, start: float, end: float, output_widt
     faces = [{"speaker_id": f"speaker_{tid}", "observations": rows, "motion_score": round(motion_scores.get(tid, 0), 5)} for tid, rows in tracks.items()]
     return {"method": f"{detector_name}_face_track" if selected else "center_fallback", "detector": detector_name, "active_speaker_id": f"speaker_{active_id}" if active_id else None,
             "active_speaker_confidence": round(confidence, 3), "faces": faces, "samples": sample_rows, "source_width": width, "source_height": height}
+
+
+def manual_crop_plan(source: Path, start: float, end: float, center_x: float, center_y: float,
+                     zoom: float, output_width: int | None = None, output_height: int | None = None) -> dict[str, Any]:
+    info = probe_media(source)
+    width, height = int(info["width"]), int(info["height"])
+    out_w, out_h = output_width or settings.render_width, output_height or settings.render_height
+    ratio = out_w / out_h
+    if width / height >= ratio:
+        base_h, base_w = height, int(round(height * ratio))
+    else:
+        base_w, base_h = width, int(round(width / ratio))
+    zoom = max(1.0, min(3.0, float(zoom)))
+    crop_w = max(2, int(round(base_w / zoom)))
+    crop_h = max(2, int(round(crop_w / ratio)))
+    if crop_h > height:
+        crop_h = height
+        crop_w = max(2, int(round(crop_h * ratio)))
+    cx = max(0.0, min(1.0, float(center_x))) * width
+    cy = max(0.0, min(1.0, float(center_y))) * height
+    x = max(0, min(width - crop_w, int(round(cx - crop_w / 2))))
+    y = max(0, min(height - crop_h, int(round(cy - crop_h / 2))))
+    return {"method": "manual_crop", "active_speaker_confidence": 0.0, "faces": [],
+            "source_width": width, "source_height": height,
+            "samples": [{"time": float(start), "x": x, "y": y, "width": crop_w, "height": crop_h},
+                        {"time": float(end), "x": x, "y": y, "width": crop_w, "height": crop_h}]}

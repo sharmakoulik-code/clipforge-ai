@@ -13,6 +13,8 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.billing.credits import InsufficientCredits, ensure_free_allocation, estimate_job_credits, refund_job, reserve_for_job
+from app.billing.plans import get_user_plan
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import enforce_rate_limit
@@ -112,8 +114,16 @@ async def upload_project(
     caption_options_json: str = Form(default="{}"),
 ) -> dict:
     enforce_rate_limit(request, scope="video-upload", limit=10)
-    if not 1 <= num_clips <= settings.processing_max_clips:
-        raise HTTPException(status_code=422, detail=f"Choose between 1 and {settings.processing_max_clips} clips.")
+    ensure_free_allocation(db, user.id)
+    plan_key, plan = get_user_plan(db, user.id)
+    max_clips = min(settings.processing_max_clips, int(plan.get("max_clips", settings.processing_max_clips)))
+    if not 1 <= num_clips <= max_clips:
+        raise HTTPException(status_code=422, detail=f"Your {plan['name']} plan allows between 1 and {max_clips} clips per job.")
+    active_jobs = db.query(func.count(ProcessingJob.id)).join(Project, Project.id == ProcessingJob.project_id).filter(
+        Project.owner_id == user.id, ProcessingJob.status.in_({"queued", "processing"})
+    ).scalar() or 0
+    if active_jobs >= int(plan.get("max_concurrent_jobs", 1)):
+        raise HTTPException(status_code=429, detail=f"Your {plan['name']} plan allows {int(plan.get('max_concurrent_jobs', 1))} concurrent processing job(s).")
     if not 5 <= min_clip_seconds <= max_clip_seconds <= 180:
         raise HTTPException(status_code=422, detail="Clip duration must be between 5 and 180 seconds, with minimum no greater than maximum.")
     if caption_style not in {"classic", "creator", "minimal", "dynamic", "custom"}:
@@ -123,7 +133,7 @@ async def upload_project(
         caption_options = validate_caption_options(parsed_caption_options)
     except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid caption options: {exc}") from exc
-    if ai_provider and ai_provider not in {"openai", "gemini", "claude"}:
+    if ai_provider and ai_provider not in {"openai", "openai-compatible", "gemini", "claude"}:
         raise HTTPException(status_code=422, detail="Choose OpenAI, Gemini, or Claude for analysis.")
     if transcription_provider and transcription_provider not in {"openai", "faster-whisper"}:
         raise HTTPException(status_code=422, detail="Choose OpenAI or local faster-whisper for transcription.")
@@ -141,6 +151,8 @@ async def upload_project(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         if metadata["duration_seconds"] <= 0:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="The video has no readable duration")
+        if metadata["duration_seconds"] > int(plan.get("max_video_seconds", 2**31 - 1)):
+            raise HTTPException(status_code=413, detail=f"Your {plan['name']} plan allows videos up to {int(plan['max_video_seconds']) // 60} minutes.")
         metadata["file_size_bytes"] = size_bytes
         project = Project(
             owner_id=user.id,
@@ -162,10 +174,19 @@ async def upload_project(
             options={"pipeline_version": "stage-3", "num_clips": num_clips, "min_clip_seconds": min_clip_seconds,
                      "max_clip_seconds": max_clip_seconds, "ai_provider": ai_provider,
                      "transcription_provider": transcription_provider, "caption_style": caption_style,
-                     "caption_options": caption_options},
+                     "caption_options": caption_options, "plan_key": plan_key,
+                     "render_profile": {"width": min(settings.render_width, int(plan["export_width"])),
+                                       "height": min(settings.render_height, int(plan["export_height"])),
+                                       "watermark": bool(plan.get("watermark", False))}},
         )
         db.add(job)
         db.flush()
+        reserve_amount = estimate_job_credits(metadata["duration_seconds"], num_clips)
+        try:
+            reserve_for_job(db, job, user.id, reserve_amount)
+        except InsufficientCredits as exc:
+            raise HTTPException(status_code=402, detail=f"This job is estimated at {reserve_amount} credits. Add credits or choose a smaller job.") from exc
+        job.options = {**(job.options or {}), "reserved_credits": reserve_amount}
         db.add_all([
             ProcessingStage(
                 job_id=job.id, name="upload_validation", sequence=1, status="completed",
@@ -181,8 +202,12 @@ async def upload_project(
         db.commit()
         db.refresh(project)
         db.refresh(job)
-        dispatch_job(job, db)
-        return {"project": _project_read(project), "job": _job_read(job)}
+        queued = dispatch_job(job, db)
+        if not queued:
+            refund_job(db, job.id, "Processing queue unavailable; reserved credits returned")
+            db.commit()
+            db.refresh(job)
+        return {"project": _project_read(project), "job": _job_read(job), "credits_reserved": reserve_amount if queued else 0}
     except Exception:
         db.rollback()
         if key:
@@ -288,6 +313,14 @@ def delete_project(project_id: str, user: User = Depends(get_current_user), db: 
         if clip.output_video_key:
             keys.add(clip.output_video_key)
         keys.update(value for value in (clip.metadata_json or {}).values() if isinstance(value, str) and value.startswith("artifacts/"))
+    processing_jobs = db.query(ProcessingJob).filter_by(project_id=project.id).all()
+    for job in processing_jobs:
+        if job.status in {"queued", "processing"}:
+            job.status = "cancelled"
+            job.error_code = "project_deleted"
+            job.error_message = "Project deletion cancelled the pending processing task."
+            job.completed_at = datetime.now(timezone.utc)
+            refund_job(db, job.id, "Project deleted; reserved credits returned")
     checkpoint_rows = db.query(ProcessingCheckpoint).join(ProcessingJob, ProcessingJob.id == ProcessingCheckpoint.job_id).filter(ProcessingJob.project_id == project.id).all()
     for checkpoint in checkpoint_rows:
         if checkpoint.artifact_key:
@@ -319,6 +352,8 @@ def project_status(project_id: str, user: User = Depends(get_current_user), db: 
 
 @router.get("/dashboard", response_model=DashboardResponse)
 def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> dict:
+    ensure_free_allocation(db, user.id)
+    db.commit()
     projects = db.query(Project).filter_by(owner_id=user.id)
     project_ids = select(Project.id).where(Project.owner_id == user.id)
     total_projects = projects.count()

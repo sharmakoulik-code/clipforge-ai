@@ -39,14 +39,16 @@ def test_analysis_model_defaults_follow_selected_provider(monkeypatch):
     assert resolve_analysis_model("openai", settings.ai_model) == "gpt-4o-mini"
     observed = {}
 
-    def request(prompt, provider, model):
+    def request(prompt, provider, model, timeout_seconds=120):
         observed["model"] = model
+        observed["timeout_seconds"] = timeout_seconds
         return '{"clips": []}'
 
     monkeypatch.setattr("app.video.analysis._provider_request", request)
     monkeypatch.setattr("app.video.analysis._validate", lambda *args: [])
     analyze_transcript({"segments": []}, 30, 20, 60, 1, provider="gemini")
     assert observed["model"] == "gemini-2.5-flash"
+    assert observed["timeout_seconds"] == 120
 
 
 def test_analysis_scores_weight_components_and_filters_bad_boundaries(monkeypatch):

@@ -80,6 +80,9 @@ class ProcessingJobRead(BaseModel):
     current_stage: str | None
     progress: int
     attempt: int
+    retry_count: int = 0
+    last_completed_stage: str | None = None
+    worker_heartbeat_at: datetime | None = None
     error_code: str | None
     error_message: str | None
     created_at: datetime
@@ -94,6 +97,7 @@ class ProjectDetail(ProjectRead):
 class UploadResponse(BaseModel):
     project: ProjectRead
     job: ProcessingJobRead
+    credits_reserved: int = 0
 
 
 class DashboardResponse(BaseModel):

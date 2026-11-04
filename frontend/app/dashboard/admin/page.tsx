@@ -1,0 +1,78 @@
+"use client";
+
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { ApiError, apiRequest } from "@/services/api";
+
+type Overview = { users_total: number; users_active: number; subscriptions_active: number; mrr_estimate_cents: number; projects_total: number; clips_total: number; jobs_failed: number; usage_totals: Record<string, number>; storage_bytes_local: number; worker_health: { available: boolean; workers: string[] } };
+type AdminUser = { id: string; email: string; display_name: string | null; is_active: boolean; is_admin: boolean; created_at: string };
+type FailedJob = { id: string; project_name: string; owner_email: string | null; current_stage: string | null; error_code: string | null; error_message: string | null; attempt: number };
+type Plan = { name: string; price_cents: number; currency: string; monthly_credits: number; max_video_seconds: number; max_clips: number; max_concurrent_jobs: number; export_width: number; export_height: number; watermark: boolean; priority: string; advanced_captions: boolean; stripe_price_id: string; active: boolean };
+type ProviderConfig = { transcription_provider: string; transcription_model: string; ai_provider: string; ai_model: string; fallback_provider: string | null; fallback_model: string; timeout_seconds: number; max_retries: number; credentials: Record<string, boolean>; secrets_are_environment_only: boolean };
+
+const input = "rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-white/10 dark:bg-[#0c0f16]";
+const section = "rounded-2xl border border-slate-200 bg-white p-5 dark:border-white/10 dark:bg-[#11141d]";
+
+export default function AdminDashboard() {
+  const qc = useQueryClient();
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [working, setWorking] = useState("");
+  const overview = useQuery({ queryKey: ["admin-overview"], queryFn: () => apiRequest<Overview>("/admin/overview") });
+  const users = useQuery({ queryKey: ["admin-users"], queryFn: () => apiRequest<{ users: AdminUser[] }>("/admin/users") });
+  const failed = useQuery({ queryKey: ["admin-failed"], queryFn: () => apiRequest<{ jobs: FailedJob[] }>("/admin/jobs/failed") });
+  const provider = useQuery({ queryKey: ["admin-providers"], queryFn: () => apiRequest<ProviderConfig>("/admin/ai/providers") });
+  const pricing = useQuery({ queryKey: ["admin-plans"], queryFn: () => apiRequest<{ plans: Record<string, Plan> }>("/admin/plans") });
+  const [providerForm, setProviderForm] = useState<ProviderConfig | null>(null);
+  const currentProvider = providerForm ?? provider.data;
+  const [planForm, setPlanForm] = useState<Record<string, Plan> | null>(null);
+  const currentPlans = planForm ?? pricing.data?.plans;
+
+  async function run(key: string, operation: () => Promise<unknown>) {
+    setWorking(key); setError(""); setNotice("");
+    try { await operation(); setNotice("Saved successfully."); await Promise.all([qc.invalidateQueries({ queryKey: ["admin-overview"] }), qc.invalidateQueries({ queryKey: ["admin-users"] }), qc.invalidateQueries({ queryKey: ["admin-failed"] }), qc.invalidateQueries({ queryKey: ["admin-providers"] }), qc.invalidateQueries({ queryKey: ["admin-plans"] })]); }
+    catch (cause) { setError(cause instanceof ApiError ? cause.message : "The administrator action failed."); }
+    finally { setWorking(""); }
+  }
+
+  async function toggleUser(user: AdminUser) {
+    if (!window.confirm(`${user.is_active ? "Suspend" : "Reactivate"} ${user.email}?`)) return;
+    await run(user.id, () => apiRequest(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ is_active: !user.is_active }) }));
+  }
+  async function adjustCredits(user: AdminUser) {
+    const raw = window.prompt(`Credit adjustment for ${user.email}. Use positive to grant, negative to deduct.`);
+    if (!raw) return;
+    const amount = Number(raw);
+    if (!Number.isSafeInteger(amount) || amount === 0) { setError("Enter a non-zero whole number of credits."); return; }
+    await run(`credits:${user.id}`, () => apiRequest(`/admin/users/${user.id}/credits`, { method: "POST", body: JSON.stringify({ amount, idempotency_key: `manual-${crypto.randomUUID()}`, description: "Administrator adjustment" }) }));
+  }
+  async function retryJob(job: FailedJob) {
+    if (!window.confirm(`Retry ${job.id.slice(0, 8)} for ${job.project_name}?`)) return;
+    await run(job.id, () => apiRequest(`/admin/jobs/${job.id}/retry`, { method: "POST" }));
+  }
+  async function saveProviders() {
+    if (!currentProvider) return;
+    await run("providers", async () => { await apiRequest("/admin/ai/providers", { method: "PUT", body: JSON.stringify({ transcription_provider: currentProvider.transcription_provider, transcription_model: currentProvider.transcription_model, ai_provider: currentProvider.ai_provider, ai_model: currentProvider.ai_model, fallback_provider: currentProvider.fallback_provider || null, fallback_model: currentProvider.fallback_model, timeout_seconds: currentProvider.timeout_seconds, max_retries: currentProvider.max_retries }) }); setProviderForm(null); });
+  }
+  async function savePlans() {
+    if (!currentPlans) return;
+    await run("plans", async () => { await apiRequest("/admin/plans", { method: "PUT", body: JSON.stringify({ plans: currentPlans }) }); setPlanForm(null); });
+  }
+  async function testProvider(name: string) {
+    await run(`test:${name}`, () => apiRequest(`/admin/ai/providers/test?provider=${name}`, { method: "POST" }));
+  }
+
+  if (overview.isLoading) return <div className="h-80 animate-pulse rounded-2xl bg-slate-200 dark:bg-white/10"/>;
+  if (overview.error || !overview.data) return <div role="alert" className={section}><h1 className="text-lg font-semibold">Administrator access required</h1><p className="mt-2 text-sm text-slate-500">{overview.error instanceof ApiError ? overview.error.message : "Could not load the administration dashboard."}</p></div>;
+  const o = overview.data;
+  const stats = [["Registered users", o.users_total], ["Active accounts", o.users_active], ["Subscriptions", o.subscriptions_active], ["MRR estimate", new Intl.NumberFormat(undefined,{style:"currency",currency:"USD"}).format(o.mrr_estimate_cents/100)], ["Projects",o.projects_total], ["Generated clips",o.clips_total], ["Failed jobs",o.jobs_failed], ["Storage",`${(o.storage_bytes_local/1024/1024/1024).toFixed(2)} GB`]] as const;
+  return <div className="space-y-6"><header><p className="text-xs font-semibold uppercase tracking-[.18em] text-violet-600">Restricted tools</p><h1 className="mt-2 text-3xl font-semibold">Administration</h1><p className="mt-2 text-sm text-slate-500">Backend role checks protect every administrative endpoint.</p></header>
+    {error&&<p role="alert" className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{error}</p>}{notice&&<p role="status" className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
+    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{stats.map(([label,value])=><article key={label} className={section}><p className="text-xs text-slate-500">{label}</p><p className="mt-3 text-2xl font-semibold">{value}</p></article>)}</section>
+    <section className={section}><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-sm font-semibold">Worker health</h2><p className="mt-1 text-xs text-slate-500">Redis/Celery ping status; infrastructure latency is not a service-level guarantee.</p></div><span className={`rounded-full px-3 py-1 text-xs ${o.worker_health.available?"bg-emerald-50 text-emerald-700":"bg-rose-50 text-rose-700"}`}>{o.worker_health.available?`Online · ${o.worker_health.workers.join(", ")}`:"No Celery worker replied"}</span></div><div className="mt-4 grid gap-2 sm:grid-cols-3">{Object.entries(o.usage_totals).map(([metric,value])=><div key={metric} className="rounded-lg bg-slate-50 p-3 text-xs dark:bg-white/[.03]"><p className="text-slate-500">{metric.replaceAll("_"," ")}</p><p className="mt-1 font-semibold">{value.toLocaleString()}</p></div>)}</div></section>
+    <section className={section}><h2 className="text-sm font-semibold">Users</h2><div className="mt-3 divide-y divide-slate-100 dark:divide-white/5">{users.data?.users.map(user=><div key={user.id} className="flex flex-wrap items-center gap-2 py-3"><div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{user.display_name||user.email} {user.is_admin&&<span className="text-violet-600">· Admin</span>}</p><p className="truncate text-[10px] text-slate-500">{user.email} · {user.is_active?"Active":"Suspended"}</p></div><button disabled={!!working||user.is_admin} onClick={()=>void toggleUser(user)} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] disabled:opacity-40 dark:border-white/10">{user.is_active?"Suspend":"Reactivate"}</button><button disabled={!!working} onClick={()=>void adjustCredits(user)} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] dark:border-white/10">Adjust credits</button></div>)}</div></section>
+    <section className={section}><h2 className="text-sm font-semibold">Failed processing jobs</h2>{failed.data?.jobs.length?<div className="mt-3 space-y-2">{failed.data.jobs.map(job=><article key={job.id} className="rounded-lg border border-slate-200 p-3 dark:border-white/10"><div className="flex flex-wrap items-center gap-2"><p className="min-w-0 flex-1 text-xs font-medium">{job.project_name} · {job.owner_email}</p><button disabled={!!working} onClick={()=>void retryJob(job)} className="rounded bg-violet-600 px-3 py-1.5 text-[10px] font-semibold text-white">Retry</button></div><p className="mt-1 break-words text-[10px] text-rose-600">{job.error_code}: {job.error_message}</p></article>)}</div>:<p className="mt-3 text-xs text-slate-500">No failed jobs.</p>}</section>
+    <section className={section}><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">AI provider configuration</h2><p className="mt-1 text-xs text-slate-500">Secrets are environment-only. Set OPENAI_BASE_URL in the server environment for an OpenAI-compatible HTTPS endpoint.</p></div><button onClick={()=>setProviderForm(provider.data?{...provider.data}:null)} className="rounded border border-slate-200 px-3 py-2 text-xs dark:border-white/10">Edit settings</button></div>{currentProvider&&<div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-xs">Transcription<select disabled={!providerForm} value={currentProvider.transcription_provider} onChange={e=>setProviderForm({...currentProvider,transcription_provider:e.target.value})} className={`${input} mt-1 w-full`}><option value="openai">OpenAI Whisper API</option><option value="faster-whisper">Local faster-whisper</option></select></label><label className="text-xs">Transcription model<input disabled={!providerForm} value={currentProvider.transcription_model} onChange={e=>setProviderForm({...currentProvider,transcription_model:e.target.value})} className={`${input} mt-1 w-full`}/></label><label className="text-xs">LLM provider<select disabled={!providerForm} value={currentProvider.ai_provider} onChange={e=>setProviderForm({...currentProvider,ai_provider:e.target.value})} className={`${input} mt-1 w-full`}><option value="openai">OpenAI</option><option value="openai-compatible">OpenAI-compatible</option><option value="gemini">Gemini</option><option value="claude">Anthropic Claude</option></select></label><label className="text-xs">Model<input disabled={!providerForm} value={currentProvider.ai_model} onChange={e=>setProviderForm({...currentProvider,ai_model:e.target.value})} className={`${input} mt-1 w-full`}/></label><label className="text-xs">Fallback provider<select disabled={!providerForm} value={currentProvider.fallback_provider??""} onChange={e=>setProviderForm({...currentProvider,fallback_provider:e.target.value||null})} className={`${input} mt-1 w-full`}><option value="">None</option><option value="openai">OpenAI</option><option value="openai-compatible">OpenAI-compatible</option><option value="gemini">Gemini</option><option value="claude">Claude</option></select></label><label className="text-xs">Fallback model<input disabled={!providerForm} value={currentProvider.fallback_model} onChange={e=>setProviderForm({...currentProvider,fallback_model:e.target.value})} className={`${input} mt-1 w-full`}/></label></div>}{currentProvider&&<div className="mt-3 flex flex-wrap gap-2">{["openai","openai-compatible","gemini","claude"].map(name=><button key={name} disabled={!!working} onClick={()=>void testProvider(name)} className="rounded border border-slate-200 px-2 py-1.5 text-[10px] dark:border-white/10">Test {name} connectivity</button>)}{providerForm&&<button disabled={!!working} onClick={()=>void saveProviders()} className="rounded bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white">Save provider settings</button>}</div>}<p className="mt-2 text-[10px] text-slate-500">Configured secrets: {Object.entries(currentProvider?.credentials??{}).map(([key,value])=>`${key.replace("_configured","")} ${value?"yes":"no"}`).join(" · ")}. Values are not displayed.</p></section>
+    <section className={section}><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="text-sm font-semibold">Pricing and plan limits</h2><p className="mt-1 text-xs text-slate-500">Catalog values come from server configuration, not frontend constants.</p></div><button onClick={()=>setPlanForm(pricing.data?.plans?structuredClone(pricing.data.plans):null)} className="rounded border border-slate-200 px-3 py-2 text-xs dark:border-white/10">Edit plans</button></div>{currentPlans&&<div className="mt-3 grid gap-3 md:grid-cols-2">{Object.entries(currentPlans).map(([key,plan])=><article key={key} className="rounded-xl border border-slate-200 p-3 dark:border-white/10"><h3 className="text-xs font-semibold">{plan.name} <span className="text-slate-400">({key})</span></h3><div className="mt-2 grid grid-cols-2 gap-2"><label className="text-[10px]">Price cents<input disabled={!planForm} type="number" value={plan.price_cents} onChange={e=>setPlanForm(previous=>previous?{...previous,[key]:{...previous[key],price_cents:Number(e.target.value)}}:previous)} className={`${input} mt-1 w-full`}/></label><label className="text-[10px]">Monthly credits<input disabled={!planForm} type="number" value={plan.monthly_credits} onChange={e=>setPlanForm(previous=>previous?{...previous,[key]:{...previous[key],monthly_credits:Number(e.target.value)}}:previous)} className={`${input} mt-1 w-full`}/></label><label className="col-span-2 text-[10px]">Stripe test Price ID<input disabled={!planForm} value={plan.stripe_price_id} onChange={e=>setPlanForm(previous=>previous?{...previous,[key]:{...previous[key],stripe_price_id:e.target.value}}:previous)} className={`${input} mt-1 w-full`}/></label></div></article>)}</div>}{planForm&&<button disabled={!!working} onClick={()=>void savePlans()} className="mt-3 rounded bg-violet-600 px-3 py-2 text-xs font-semibold text-white">Save pricing catalog</button>}</section>
+  </div>;
+}

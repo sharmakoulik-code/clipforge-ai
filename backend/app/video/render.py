@@ -46,7 +46,7 @@ def _interpolate(samples: list[dict[str, Any]], axis: str, timestamp: float, cli
 
 
 def _dynamic_crop_render(source: Path, output: Path, start: float, duration: float, samples: list[dict[str, Any]],
-                         subtitle_path: Path, width: int, height: int, fps: int, bitrate: str) -> None:
+                         subtitle_path: Path, width: int, height: int, fps: int, bitrate: str, watermark: bool = False) -> None:
     try:
         import cv2
     except ImportError as exc:
@@ -63,9 +63,12 @@ def _dynamic_crop_render(source: Path, output: Path, start: float, duration: flo
     fixed_y = y_values[len(y_values) // 2]
     cap.set(cv2.CAP_PROP_POS_MSEC, start * 1000)
     frame_count = max(1, int(round(duration * source_fps)))
+    dynamic_filters = f"setsar=1,fps={fps},subtitles='{_filter_path(subtitle_path)}'"
+    if watermark:
+        dynamic_filters += ",drawtext=text='ClipForge':fontcolor=white@0.70:fontsize=28:x=w-tw-24:y=h-th-24:box=1:boxcolor=black@0.35:boxborderw=6"
     command = [_binary("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
                "-s", f"{width}x{height}", "-r", f"{source_fps:.6f}", "-i", "pipe:0", "-ss", f"{start:.3f}", "-i", str(source),
-               "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "1:a:0?", "-vf", f"setsar=1,fps={fps},subtitles='{_filter_path(subtitle_path)}'",
+               "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "1:a:0?", "-vf", dynamic_filters,
                "-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate, "-maxrate", bitrate, "-bufsize", "10M",
                "-pix_fmt", "yuv420p", "-fps_mode", "cfr", "-c:a", "aac", "-b:a", "192k", "-af", "aresample=async=1:first_pts=0",
                "-movflags", "+faststart", "-max_muxing_queue_size", "1024", str(output)]
@@ -110,7 +113,7 @@ def _dynamic_crop_render(source: Path, output: Path, start: float, duration: flo
 
 def render_clip(source: Path, destination: Path, start: float, end: float, crop: dict[str, Any], subtitle_path: Path,
                 thumbnail_path: Path, preview_path: Path, width: int | None = None, height: int | None = None,
-                fps: int | None = None, bitrate: str | None = None) -> dict[str, Any]:
+                fps: int | None = None, bitrate: str | None = None, watermark: bool = False) -> dict[str, Any]:
     width, height = width or settings.render_width, height or settings.render_height
     fps, bitrate = fps or settings.render_fps, bitrate or settings.render_video_bitrate
     duration = end - start
@@ -126,13 +129,15 @@ def render_clip(source: Path, destination: Path, start: float, end: float, crop:
     y_values = sorted(int(row.get("y", fallback_y)) for row in samples)
     y_expr = str(y_values[len(y_values) // 2] if y_values else fallback_y)
     video_filter = f"crop={crop_w}:{crop_h}:'{x_expr}':{y_expr},scale={width}:{height}:flags=lanczos,setsar=1,fps={fps},subtitles='{_filter_path(subtitle_path)}'"
+    if watermark:
+        video_filter += ",drawtext=text='ClipForge':fontcolor=white@0.70:fontsize=28:x=w-tw-24:y=h-th-24:box=1:boxcolor=black@0.35:boxborderw=6"
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp = destination.with_name(destination.stem + ".partial" + destination.suffix)
     temp.unlink(missing_ok=True)
     try:
         moving_x = str(crop.get("method", "")).endswith("_face_track") and len({int(row.get("x", fallback_x)) for row in samples}) > 1
         if moving_x:
-            _dynamic_crop_render(source, temp, start, duration, samples, subtitle_path, width, height, fps, bitrate)
+            _dynamic_crop_render(source, temp, start, duration, samples, subtitle_path, width, height, fps, bitrate, watermark)
         else:
             run_ffmpeg(["-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "0:a:0?",
                         "-vf", video_filter, "-c:v", "libx264", "-preset", "veryfast", "-b:v", bitrate, "-maxrate", bitrate,
