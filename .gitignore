@@ -42,3 +42,6 @@ media/
 # Docker/local database
 postgres_data/
 redis_data/
+
+# Local workspace Postgres data
+.pgdata/
