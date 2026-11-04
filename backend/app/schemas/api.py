@@ -67,7 +67,7 @@ class ProjectRead(BaseModel):
 
 
 JobState = Literal[
-    "queued", "uploading", "extracting_audio", "transcribing", "analyzing",
+    "queued", "processing", "uploading", "extracting_audio", "transcribing", "analyzing",
     "detecting_speakers", "cropping", "captioning", "rendering", "completed", "failed",
 ]
 

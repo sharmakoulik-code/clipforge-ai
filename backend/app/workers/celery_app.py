@@ -10,6 +10,9 @@ celery.conf.update(
     timezone="UTC",
     task_track_started=True,
     task_publish_retry=False,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
 )
 celery.autodiscover_tasks(["app.workers"])
 

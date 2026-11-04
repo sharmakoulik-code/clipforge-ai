@@ -65,6 +65,7 @@ class Transcript(BaseModel):
     language: Mapped[str | None] = mapped_column(String(16))
     text: Mapped[str | None] = mapped_column(Text)
     segments: Mapped[list | None] = mapped_column(JSON)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
 
 
@@ -75,7 +76,7 @@ class Clip(BaseModel):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     start_seconds: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     end_seconds: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
-    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 4))
+    score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))
     status: Mapped[str] = mapped_column(String(32), default="suggested", nullable=False)
     output_video_key: Mapped[str | None] = mapped_column(String(1024))
     metadata_json: Mapped[dict | None] = mapped_column(JSON)

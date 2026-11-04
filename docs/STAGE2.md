@@ -1,5 +1,7 @@
 # Stage 2 delivery and verification
 
+> Historical Stage 2 record. The processing worker and storage support were subsequently extended in Stage 3; see [`STAGE3.md`](STAGE3.md) for current capabilities and limits.
+
 ## Implemented
 
 - Original responsive Frameforge-branded marketing site with navigation, hero/upload CTA, product-preview section, workflow, features, AI explainer, pricing preview, FAQ, footer, and registration/sign-in routes. Theme toggle supports light/dark themes.

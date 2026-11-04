@@ -17,13 +17,14 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.rate_limit import enforce_rate_limit
 from app.core.security import get_current_user
-from app.models.models import Clip, ClipRenderVersion, CreditWallet, ProcessingJob, ProcessingStage, Project, Subscription, User
+from app.models.models import Clip, ClipRenderVersion, CreditWallet, ProcessingCheckpoint, ProcessingJob, ProcessingStage, Project, Subscription, Transcript, User
 from app.schemas.api import (
     DashboardResponse, ProcessingJobRead, ProjectDetail, ProjectRead,
     ProjectRenameRequest, UploadResponse, YouTubeImportRequest,
 )
 from app.services.job_queue import dispatch_job
 from app.storage.local import storage
+from app.video.caption_options import validate_caption_options
 from app.video.metadata import MetadataError, extract_video_metadata
 
 logger = logging.getLogger(__name__)
@@ -102,8 +103,30 @@ async def upload_project(
     db: Session = Depends(get_db),
     file: UploadFile = File(...),
     project_name: str | None = Form(default=None),
+    num_clips: int = Form(default=3),
+    min_clip_seconds: int = Form(default=20),
+    max_clip_seconds: int = Form(default=60),
+    ai_provider: str | None = Form(default=None),
+    transcription_provider: str | None = Form(default=None),
+    caption_style: str = Form(default="creator"),
+    caption_options_json: str = Form(default="{}"),
 ) -> dict:
     enforce_rate_limit(request, scope="video-upload", limit=10)
+    if not 1 <= num_clips <= settings.processing_max_clips:
+        raise HTTPException(status_code=422, detail=f"Choose between 1 and {settings.processing_max_clips} clips.")
+    if not 5 <= min_clip_seconds <= max_clip_seconds <= 180:
+        raise HTTPException(status_code=422, detail="Clip duration must be between 5 and 180 seconds, with minimum no greater than maximum.")
+    if caption_style not in {"classic", "creator", "minimal", "dynamic", "custom"}:
+        raise HTTPException(status_code=422, detail="Choose a supported caption style.")
+    try:
+        parsed_caption_options = json.loads(caption_options_json)
+        caption_options = validate_caption_options(parsed_caption_options)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid caption options: {exc}") from exc
+    if ai_provider and ai_provider not in {"openai", "gemini", "claude"}:
+        raise HTTPException(status_code=422, detail="Choose OpenAI, Gemini, or Claude for analysis.")
+    if transcription_provider and transcription_provider not in {"openai", "faster-whisper"}:
+        raise HTTPException(status_code=422, detail="Choose OpenAI or local faster-whisper for transcription.")
     filename = _filename(file.filename)
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_VIDEO_SUFFIXES:
@@ -111,6 +134,7 @@ async def upload_project(
     key: str | None = None
     try:
         key, size_bytes = await _save_upload(file, suffix, request)
+        storage.commit(key)
         try:
             metadata = extract_video_metadata(storage.resolve(key))
         except MetadataError as exc:
@@ -135,7 +159,10 @@ async def upload_project(
             status="queued",
             current_stage="source_validation",
             progress=0,
-            options={"pipeline_version": "stage-3", "ai_processing_enabled": False},
+            options={"pipeline_version": "stage-3", "num_clips": num_clips, "min_clip_seconds": min_clip_seconds,
+                     "max_clip_seconds": max_clip_seconds, "ai_provider": ai_provider,
+                     "transcription_provider": transcription_provider, "caption_style": caption_style,
+                     "caption_options": caption_options},
         )
         db.add(job)
         db.flush()
@@ -252,13 +279,33 @@ def rename_project(project_id: str, payload: ProjectRenameRequest, user: User = 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_project(project_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)) -> None:
     project = _owned_project(db, user, project_id)
-    source_key = project.source_video_key
+    keys: set[str] = {project.source_video_key} if project.source_video_key else set()
+    for transcript in db.query(Transcript).filter_by(project_id=project.id).all():
+        artifact = (transcript.metadata_json or {}).get("artifact_key")
+        if artifact:
+            keys.add(artifact)
+    for clip in db.query(Clip).filter_by(project_id=project.id).all():
+        if clip.output_video_key:
+            keys.add(clip.output_video_key)
+        keys.update(value for value in (clip.metadata_json or {}).values() if isinstance(value, str) and value.startswith("artifacts/"))
+    checkpoint_rows = db.query(ProcessingCheckpoint).join(ProcessingJob, ProcessingJob.id == ProcessingCheckpoint.job_id).filter(ProcessingJob.project_id == project.id).all()
+    for checkpoint in checkpoint_rows:
+        if checkpoint.artifact_key:
+            keys.add(checkpoint.artifact_key)
+        for value in (checkpoint.data or {}).values():
+            if isinstance(value, str) and value.startswith("artifacts/"):
+                keys.add(value)
     db.delete(project)
     db.commit()
+    for key in keys:
+        try:
+            storage.delete(key)
+        except Exception:
+            logger.exception("Unable to clean up deleted project artifact project_id=%s key=%s", project_id, key)
     try:
-        storage.delete(source_key)
-    except OSError:
-        logger.exception("Unable to clean up deleted project media project_id=%s", project_id)
+        storage.delete_prefix(f"artifacts/{project_id}")
+    except Exception:
+        logger.exception("Unable to remove derived project artifacts project_id=%s", project_id)
 
 
 @router.get("/projects/{project_id}/status")
@@ -276,7 +323,7 @@ def dashboard(user: User = Depends(get_current_user), db: Session = Depends(get_
     project_ids = select(Project.id).where(Project.owner_id == user.id)
     total_projects = projects.count()
     total_clips = db.query(func.count(Clip.id)).filter(Clip.project_id.in_(project_ids)).scalar() or 0
-    active_statuses = {"queued", "uploading", "extracting_audio", "transcribing", "analyzing", "detecting_speakers", "cropping", "captioning", "rendering"}
+    active_statuses = {"queued", "processing", "uploading", "extracting_audio", "transcribing", "analyzing", "detecting_speakers", "cropping", "captioning", "rendering"}
     processing_videos = db.query(func.count(ProcessingJob.id)).filter(
         ProcessingJob.project_id.in_(project_ids), ProcessingJob.status.in_(active_statuses)
     ).scalar() or 0

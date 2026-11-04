@@ -63,12 +63,20 @@ export function uploadProject(
   projectName: string,
   onProgress: (percent: number) => void,
   signal: AbortSignal,
+  options: { numClips: number; minClipSeconds: number; maxClipSeconds: number; captionStyle: string; aiProvider: string; transcriptionProvider: string; captionOptions: Record<string, unknown> },
 ): Promise<{ project: Project; job: ProcessingJob }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     form.append("file", file);
     form.append("project_name", projectName);
+    form.append("num_clips", String(options.numClips));
+    form.append("min_clip_seconds", String(options.minClipSeconds));
+    form.append("max_clip_seconds", String(options.maxClipSeconds));
+    form.append("caption_style", options.captionStyle);
+    form.append("ai_provider", options.aiProvider);
+    form.append("transcription_provider", options.transcriptionProvider);
+    form.append("caption_options_json", JSON.stringify(options.captionOptions));
     xhr.open("POST", `${API_BASE}/projects/upload`);
     xhr.withCredentials = true;
     const csrf = csrfToken();

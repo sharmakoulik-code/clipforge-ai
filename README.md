@@ -64,7 +64,7 @@ Rate limits are process-local in this stage, not distributed. Configure `TRUSTED
 - `GET /api/projects`, `GET /api/projects/{project_id}`, `PATCH /api/projects/{project_id}`, `DELETE /api/projects/{project_id}`
 - `GET /api/projects/{project_id}/status`, `GET /api/jobs/{job_id}`, `POST /api/jobs/{job_id}/retry`
 
-The YouTube route may request public oEmbed metadata, but it does not download video or bypass access controls. Users must upload an authorized source file. The Stage 2 Celery worker verifies stored media and leaves the job queued for Stage 3's AI pipeline; it does not generate clips.
+The YouTube route may request public oEmbed metadata, but it does not download video or bypass access controls. Users must upload an authorized source file. Stage 3 now runs an independently checkpointed Celery pipeline for audio extraction, configured transcription, LLM clip analysis, face tracking/reframing, captions, FFmpeg rendering, and output validation. Live provider credentials/models are required for real transcript-driven clips; see `docs/STAGE3.md` for verified tests and integration limits.
 
 ## Quality checks
 
@@ -74,4 +74,4 @@ The YouTube route may request public oEmbed metadata, but it does not download v
 (cd backend && PYTHONPATH=. ../.venv/bin/alembic -c alembic.ini upgrade head)
 ```
 
-See [`docs/STAGE2.md`](docs/STAGE2.md) for exact test and integration results, known limitations, and the end-to-end upload smoke test. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) records data ownership and the Stage 3 pipeline plan.
+See [`docs/STAGE2.md`](docs/STAGE2.md) for Stage 2 delivery details and [`docs/STAGE3.md`](docs/STAGE3.md) for the AI processing implementation, tests, and remaining live-service limits. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) records current architecture and data ownership.
