@@ -23,6 +23,15 @@ def test_production_configuration_accepts_secure_basics():
     assert production_settings().app_env == "production"
 
 
+def test_normalizes_hosted_postgres_urls_to_psycopg3():
+    assert Settings(_env_file=None, database_url="postgresql://user:pass@db.example.invalid/app").database_url == (
+        "postgresql+psycopg://user:pass@db.example.invalid/app"
+    )
+    assert Settings(_env_file=None, database_url="postgres://user:pass@db.example.invalid/app").database_url == (
+        "postgresql+psycopg://user:pass@db.example.invalid/app"
+    )
+
+
 def test_production_rejects_development_key_sqlite_and_insecure_frontend():
     with pytest.raises(ValidationError, match="unique SECRET_KEY"):
         production_settings(secret_key="development-only-change-me")

@@ -66,4 +66,4 @@ The frontend proxies relative `/api/*` requests through `BACKEND_INTERNAL_URL` (
 git diff --check
 ```
 
-See [docs/STAGE4.md](docs/STAGE4.md) and [docs/STAGE5.md](docs/STAGE5.md) for implemented/partial/unverified features, provider support, setup requirements and pre-launch gaps. See [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.
+See [docs/STAGE4.md](docs/STAGE4.md) and [docs/STAGE5.md](docs/STAGE5.md) for implemented/partial/unverified features, provider support, setup requirements and pre-launch gaps. See [docs/RAILWAY.md](docs/RAILWAY.md) for the backend deployment checklist, and [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.
