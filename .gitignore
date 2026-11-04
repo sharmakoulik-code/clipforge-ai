@@ -1,0 +1,44 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local media and runtime data
+uploads/
+media/
+*.mp4
+*.mov
+*.mkv
+*.wav
+*.mp3
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker/local database
+postgres_data/
+redis_data/
