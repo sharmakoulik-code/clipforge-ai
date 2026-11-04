@@ -1,6 +1,6 @@
 # Railway deployment (backend)
 
-This guide deploys the FastAPI API and the two Celery processes as separate Railway services. PostgreSQL, Redis, and object storage are required for a durable production setup. Do not use `docker-compose.yml` as the Railway production definition; it is for local development.
+This guide covers the backend service setup. See [deployment preparation](DEPLOYMENT.md) for the full Vercel frontend, environment-variable, CORS/cookie, storage, and verification plan. Three service-specific Railway config-as-code files are provided: [`railway.api.toml`](../railway.api.toml), [`railway.worker.toml`](../railway.worker.toml), and [`railway.scheduler.toml`](../railway.scheduler.toml). Select the corresponding file in each Railway service's config-as-code setting. PostgreSQL, Redis, and S3-compatible object storage are required for production. Do not use `docker-compose.yml` as the Railway production definition; it is for local development.
 
 > Railway account provisioning is not connected to this workspace. These steps prepare the repository/runtime, but the project and services must be created in the Railway dashboard (or Railway CLI after you authenticate there). Never paste provider secrets into chat or commit them.
 
@@ -17,7 +17,7 @@ The backend normalizes common `postgres://` and `postgresql://` URLs to the inst
 
 ## 2. Configure the API service
 
-Create a service from the same repository with the repository root as its build context and `backend/Dockerfile` as the Dockerfile. Do not set the build context to `backend/`: the Dockerfile copies files from `backend/` relative to the repository root.
+Create the API service from the same repository with the repository root as its build context and `backend/Dockerfile` as its Dockerfile. Do not set the build context to `backend/`: the Dockerfile copies files from `backend/` relative to the repository root. Set `BACKEND_URL` to the final public HTTPS API origin; production Host validation uses it.
 
 The Docker image installs FFmpeg and starts the API on Railway's `PORT` (defaulting to 8000 locally). On startup it applies Alembic migrations, then starts Uvicorn. The health-check path is `/health/ready`. Start with a single API replica; rate limiting is process-local and is not ready for multi-replica traffic.
 
@@ -39,7 +39,7 @@ After Railway creates a public domain for the API, check `https://<api-domain>/h
 
 ## 3. Add worker and scheduler services
 
-Create two more services from the same repository and Dockerfile (`backend/Dockerfile`), using the same `DATABASE_URL`, `REDIS_URL`, and other backend runtime variables as the API. Set these service start commands:
+Create two more services from the same repository and Dockerfile (`backend/Dockerfile`), using the same `DATABASE_URL`, `REDIS_URL`, and other backend runtime variables as the API. Select the matching worker or scheduler config-as-code file for its start command. Deploy only one scheduler instance. Start the API and allow migrations/health checks to complete before starting worker and scheduler services.
 
 - Worker: `celery -A app.workers.celery_app.celery worker --loglevel=INFO`
 - Scheduler: `celery -A app.workers.celery_app.celery beat --loglevel=INFO`

@@ -1,6 +1,6 @@
 # ClipForge AI — AI Video Repurposer
 
-ClipForge turns rights-cleared long-form video uploads into vertical short clips with captions and an interactive post-processing editor. This repository has evolved through five stages: the account/dashboard foundation, secure ingestion, resumable AI/video processing, SaaS/editor foundations, and social publishing foundations. See [Stage 2](docs/STAGE2.md), [Stage 3](docs/STAGE3.md), [Stage 4](docs/STAGE4.md), and [Stage 5](docs/STAGE5.md) for scope and verification boundaries.
+ClipForge turns rights-cleared long-form video uploads into vertical short clips with captions and an interactive post-processing editor. This repository has evolved through five stages: the account/dashboard foundation, secure ingestion, resumable AI/video processing, SaaS/editor foundations, and social publishing foundations. See [Stage 2](docs/STAGE2.md), [Stage 3](docs/STAGE3.md), [Stage 4](docs/STAGE4.md), and [Stage 5](docs/STAGE5.md) for scope and verification boundaries. See the [deployment preparation guide](docs/DEPLOYMENT.md) for the Vercel frontend and separate Railway API, worker, and scheduler configuration.
 
 > **Launch status:** local implementation and automated checks are available, but this is not a verified production deployment. Docker/Compose, live AI providers, Stripe, SMTP, cloud storage, and production operations have not been end-to-end tested. Stripe live keys are rejected in production configuration. Do not deploy publicly, enable live payments, or incur paid service charges without explicit approval.
 
@@ -49,7 +49,7 @@ The frontend proxies relative `/api/*` requests through `BACKEND_INTERNAL_URL` (
 ## Configuration and security
 
 - Never commit `.env` or expose API, SMTP, Stripe, storage, or session secrets to browser code.
-- Production mode (`APP_ENV=production`) requires a generated secret of at least 32 characters, HTTPS `FRONTEND_URL`, PostgreSQL, Redis, and SMTP. Use managed secrets, TLS, backups, persistent object storage, and a narrow `TRUSTED_PROXY_CIDRS` in a real deployment.
+- Production mode (`APP_ENV=production`) requires a generated secret of at least 32 characters, HTTPS frontend/backend origins, PostgreSQL, Redis, SMTP, a configured S3-compatible bucket, and explicit ingress proxy CIDRs. Use managed secrets, TLS, and backups in a real deployment.
 - `OPENAI_BASE_URL` supports OpenAI-compatible chat-completions endpoints and must use HTTPS. Keep the endpoint under operator control; provider credentials are sent to it.
 - Stripe remains **test-mode only**. Set only `sk_test_` credentials until a separately approved production release; `sk_live_` is explicitly blocked in production configuration.
 - Rate limits are currently process-local and are not sufficient for a multi-instance deployment. Refer to [Stage 4 launch gaps](docs/STAGE4.md).
@@ -66,4 +66,4 @@ The frontend proxies relative `/api/*` requests through `BACKEND_INTERNAL_URL` (
 git diff --check
 ```
 
-See [docs/STAGE4.md](docs/STAGE4.md) and [docs/STAGE5.md](docs/STAGE5.md) for implemented/partial/unverified features, provider support, setup requirements and pre-launch gaps. See [docs/RAILWAY.md](docs/RAILWAY.md) for the backend deployment checklist, and [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations.
+See [docs/STAGE4.md](docs/STAGE4.md) and [docs/STAGE5.md](docs/STAGE5.md) for implemented/partial/unverified features, provider support, setup requirements and pre-launch gaps. See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for hosted deployment configuration, [docs/RAILWAY.md](docs/RAILWAY.md) for the backend checklist, and [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md) for workspace/tool verification limitations. GitHub Pages is not configured or modified by this repository change; deploy the actual Next.js frontend using Vercel with `frontend/` as the project root.

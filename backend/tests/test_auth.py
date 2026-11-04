@@ -58,6 +58,11 @@ def test_production_password_reset_uses_mail_adapter_without_exposing_token(clie
     sent: list[tuple[str, str]] = []
     monkeypatch.setattr(settings, "app_env", "production")
     monkeypatch.setattr(auth_api, "send_password_reset_email", lambda recipient, token: sent.append((recipient, token)))
+    login = client.post("/api/auth/login", json={"email": "mail@example.com", "password": "SecureLongPassword!23"})
+    assert login.status_code == 200
+    cookies = login.headers.get_list("set-cookie")
+    assert any("clipforge_session=" in cookie and "secure" in cookie.lower() and "httponly" in cookie.lower() and "samesite=lax" in cookie.lower() for cookie in cookies)
+    assert any("clipforge_csrf=" in cookie and "secure" in cookie.lower() and "samesite=lax" in cookie.lower() for cookie in cookies)
     response = client.post("/api/auth/password-reset", json={"email": "mail@example.com"})
     assert response.status_code == 202
     assert response.json()["debug_token"] is None

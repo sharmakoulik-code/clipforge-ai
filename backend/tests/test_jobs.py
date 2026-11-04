@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.api import jobs as jobs_api
 from app.api import projects as projects_api
 from app.services import job_queue
+from app.workers.celery_app import celery
 
 
 def test_failed_job_can_be_retried_and_status_is_persisted(client: TestClient, monkeypatch) -> None:
@@ -27,3 +28,9 @@ def test_failed_job_can_be_retried_and_status_is_persisted(client: TestClient, m
     assert retried.json()["status"] == "queued"
     assert retried.json()["attempt"] == 1
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "queued"
+
+
+def test_celery_worker_concurrency_uses_application_setting() -> None:
+    from app.core.config import settings
+
+    assert celery.conf.worker_concurrency == settings.celery_worker_concurrency

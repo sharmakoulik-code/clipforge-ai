@@ -1,7 +1,9 @@
 import logging
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.admin import router as admin_router
 from app.api.billing import router as billing_router
@@ -21,6 +23,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 app.add_middleware(UploadLimitMiddleware)
+backend_host = urlsplit(settings.backend_url).hostname
+trusted_hosts = [host for host in (backend_host, "localhost", "127.0.0.1", "::1") if host]
+if settings.app_env.lower() not in {"production", "prod"}:
+    trusted_hosts.append("testserver")
+app.add_middleware(
+    TrustedHostMiddleware,
+    allowed_hosts=trusted_hosts,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url],
