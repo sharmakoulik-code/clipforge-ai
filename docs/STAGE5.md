@@ -1,6 +1,6 @@
 # Stage 5 — Social publishing
 
-Updated 2026-11-04. This documents the implementation and verification limits in this checkout; it is not a statement that social accounts have been authorized or that external publishing has been tested.
+Updated 2026-11-05. This documents the implementation and verification limits in this checkout; it is not a statement that social accounts have been authorized or that external publishing has been tested.
 
 ## Provider support
 
@@ -46,10 +46,10 @@ Do not share `.env` files, OAuth client secrets, refresh tokens, or the Fernet k
 ## Local verification and known limitations
 
 - Five mocked Stage 5 tests cover OAuth one-time state/PKCE and encrypted tokens, resumable upload request construction, clip-scoped metadata with idempotent charges/refunds, ownership/quota/timezone rules, and Celery Beat dispatch plus idempotent worker completion/audit/usage recording.
-- Frontend TypeScript checking and production compilation pass locally. Alembic migration drift check passes against the local SQLite configuration.
+- Current local verification: backend compileall and all 50 backend tests pass; Alembic upgrade and drift check pass against SQLite; frontend TypeScript checking and production build pass; `npm audit` reports no frontend dependency vulnerabilities.
 - Backend Stage 5 tests use mocks/local SQLite; they do not establish Google authorization, YouTube upload acceptance, provider quota availability, refresh-token behavior in production, or live social publishing. No real Google credentials or authorized channel are configured in this workspace.
-- The backend suite has **46 passed, 3 failed**: the only failures are three existing FFmpeg integration tests that require system `ffmpeg`/`ffprobe`, absent in this workspace. Excluding those 3 tests produces 46 passes.
-- PostgreSQL/Redis/Celery runtime behavior and Compose container builds were not run here because Docker is unavailable. Concurrency behavior should be exercised against the intended PostgreSQL/Redis deployment before launch.
+- An isolated PostgreSQL 14 instance verified migrations from empty and pre-existing schemas, preservation of existing rows, model drift, foreign keys/indexes, and transaction rollback. This does not verify the PostgreSQL 16 Compose image.
+- A generated-video integration check exercised authenticated upload through real FFprobe, audio extraction, crop analysis, captions, FFmpeg watermark/render, preview and download; transcription and LLM analysis were mocked. Redis-backed Celery workers, Redis scheduling/recovery, and Compose image/runtime checks remain unverified because Docker and Redis are unavailable.
 - YouTube API project verification, quotas, upload restrictions, branding/consent requirements, privacy obligations, production retention/deletion, token rotation, monitoring and support procedures must be reviewed for the deployment’s Google project. No public deployment, paid service activation, live payment, or external publishing was performed.
 
 ## Configuration reference

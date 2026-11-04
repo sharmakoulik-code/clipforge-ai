@@ -123,6 +123,10 @@ def test_real_ffmpeg_vertical_render_and_audio_extraction(tmp_path):
     full_size = render_clip(source, tmp_path / "default-vertical.mp4", 0, 2, crop, subtitles,
                             tmp_path / "default-vertical.jpg", tmp_path / "default-preview.mp4", fps=15, bitrate="1M")
     assert (full_size["width"], full_size["height"]) == (1080, 1920)
+    watermarked = render_clip(source, tmp_path / "watermarked.mp4", 0, 2, crop, subtitles,
+                              tmp_path / "watermarked.jpg", tmp_path / "watermarked-preview.mp4",
+                              width=180, height=320, fps=15, bitrate="500k", watermark=True)
+    assert watermarked["validated"] and (watermarked["width"], watermarked["height"]) == (180, 320)
 
 
 def test_audio_extraction_reports_video_without_audio(tmp_path):

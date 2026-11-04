@@ -32,6 +32,18 @@ def _filter_path(path: Path) -> str:
     return path.as_posix().replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
 
 
+def _watermark_filter() -> str:
+    if os.name == "nt":
+        font_path = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "arial.ttf"
+    else:
+        font_path = Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")
+    font_option = f"fontfile='{_filter_path(font_path)}':" if font_path.is_file() else ""
+    return (
+        f"drawtext={font_option}text='ClipForge':fontcolor=white@0.70:fontsize=28:"
+        "x=w-tw-24:y=h-th-24:box=1:boxcolor=black@0.35:boxborderw=6"
+    )
+
+
 def _interpolate(samples: list[dict[str, Any]], axis: str, timestamp: float, clip_start: float, fallback: int) -> int:
     points = sorted((float(row.get("time", clip_start)), int(row.get(axis, fallback))) for row in samples)
     if not points:
@@ -65,7 +77,7 @@ def _dynamic_crop_render(source: Path, output: Path, start: float, duration: flo
     frame_count = max(1, int(round(duration * source_fps)))
     dynamic_filters = f"setsar=1,fps={fps},subtitles='{_filter_path(subtitle_path)}'"
     if watermark:
-        dynamic_filters += ",drawtext=text='ClipForge':fontcolor=white@0.70:fontsize=28:x=w-tw-24:y=h-th-24:box=1:boxcolor=black@0.35:boxborderw=6"
+        dynamic_filters += f",{_watermark_filter()}"
     command = [_binary("ffmpeg"), "-hide_banner", "-nostdin", "-y", "-f", "rawvideo", "-pix_fmt", "bgr24",
                "-s", f"{width}x{height}", "-r", f"{source_fps:.6f}", "-i", "pipe:0", "-ss", f"{start:.3f}", "-i", str(source),
                "-t", f"{duration:.3f}", "-map", "0:v:0", "-map", "1:a:0?", "-vf", dynamic_filters,
@@ -130,7 +142,7 @@ def render_clip(source: Path, destination: Path, start: float, end: float, crop:
     y_expr = str(y_values[len(y_values) // 2] if y_values else fallback_y)
     video_filter = f"crop={crop_w}:{crop_h}:'{x_expr}':{y_expr},scale={width}:{height}:flags=lanczos,setsar=1,fps={fps},subtitles='{_filter_path(subtitle_path)}'"
     if watermark:
-        video_filter += ",drawtext=text='ClipForge':fontcolor=white@0.70:fontsize=28:x=w-tw-24:y=h-th-24:box=1:boxcolor=black@0.35:boxborderw=6"
+        video_filter += f",{_watermark_filter()}"
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp = destination.with_name(destination.stem + ".partial" + destination.suffix)
     temp.unlink(missing_ok=True)
