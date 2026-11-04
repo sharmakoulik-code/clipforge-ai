@@ -25,7 +25,7 @@ Checked during Stage 1 on 2026-11-04. “Verified” means an operation was actu
 | Docker / Compose | Unavailable to verify | Docker and Compose executables are absent. Compose was not started or validated by Docker; the YAML parsed successfully with PyYAML and local instructions are documented. |
 | FFmpeg / FFprobe | Unavailable to verify | Neither executable is installed on the host. Backend image installs FFmpeg, but Docker is absent so that image was not built or inspected. |
 | External AI, payment, or cloud APIs | Not tested | No provider credentials were supplied; the foundation does not call these providers. Sandbox outbound access is limited to GitHub, npm registry, and PyPI hosts, so arbitrary provider API connectivity is not established. |
-| Commit and push | Pending until final report | Local commit/push status is reported in the Stage 1 completion response. |
+| Commit and push | Verified | Commit `09851504c91357684c806c7adf6effe8187eb5a3` was pushed to `origin/arena/01abe54e-clipforge-ai`; `git ls-remote` confirmed the remote ref matches. |
 
 ## Verification commands run
 
