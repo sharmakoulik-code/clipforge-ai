@@ -7,7 +7,7 @@ Checked during Stage 1/2 on 2026-11-04. “Verified” means an operation was ru
 - The checkout is `/home/user/clipforge-ai`, remote `https://github.com/sharmakoulik-code/clipforge-ai.git`, based at `277ff7664b4cff398532a7de04c6612ec90079e7`.
 - GitHub CLI authentication is active for `sharmakoulik-code`; the remote `main` branch is accessible. Account listing reports `clipforge-ai` as public.
 - The requested `ai-video-repurposer` repository was not found under this connected account. The Arena session is bound to `arena/01abe54e-clipforge-ai`; no repo/branch switch was made. If another owner/repository was intended, connect a new Arena workspace to it.
-- Stage 2 changes are being delivered on the session branch. They are not a commit to `main`.
+- Stage 2 commit `cce429d46503e23eaaa766d4686456ba84c295d5` was pushed to `origin/arena/01abe54e-clipforge-ai`; `git ls-remote` confirmed the ref. It is not a commit to `main`.
 
 ## Verified local capability matrix
 

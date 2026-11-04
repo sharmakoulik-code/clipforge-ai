@@ -31,4 +31,4 @@ A generated one-second MP4 was sent through the running Next.js `/api` rewrite t
 5. Rate limits are process-local; use Redis/edge-level distributed limits for multi-worker deployments. Configure `TRUSTED_PROXY_CIDRS` narrowly.
 6. PostgreSQL migration was tested on embedded 18.6, not the Compose PostgreSQL 16 image. Docker Compose startup itself was not tested.
 7. Available credits are database-backed (new users start at zero), but no purchase, subscription management, credit reservation, or charge endpoint exists.
-8. The Arena checkout is `clipforge-ai` on `arena/01abe54e-clipforge-ai`; Stage 2 work must be committed/pushed to that session branch. It is not the requested `ai-video-repurposer` repository or `main` branch; see `docs/ENVIRONMENT.md`.
+8. The Arena checkout is `clipforge-ai` on `arena/01abe54e-clipforge-ai`; commit `cce429d46503e23eaaa766d4686456ba84c295d5` is pushed there. It is not the requested `ai-video-repurposer` repository or `main` branch; see `docs/ENVIRONMENT.md`.
